@@ -1,0 +1,62 @@
+[project]
+name = "hwval"
+version = "0.1.0"
+description = "Structured assertion/check primitives for hardware validation. Bare-minimum Python port of UVVM's check_value and check_value_in_range."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Amnay" },
+]
+keywords = ["hardware", "validation", "verification", "testbench", "assert", "check", "dut"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Hardware",
+]
+
+dependencies = []
+
+[project.urls]
+Homepage = "https://uvvm.github.io/"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hwval"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/hwval",
+    "tests",
+    "README.md",
+    "pyproject.toml",
+]
+
+# ---------------------------------------------------------------------------
+# uv-managed dev environment (PEP 735 dependency groups)
+# ---------------------------------------------------------------------------
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+# ---------------------------------------------------------------------------
+# Test runner config
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v"
