@@ -13,3 +13,7 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Example 07 + docs/generated produce ephemeral .docx files.
+examples/*/out/
+docs/generated/*.docx

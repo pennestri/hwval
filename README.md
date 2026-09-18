@@ -5,6 +5,16 @@ inspired by UVVM's `check_value` and `check_value_in_range`
 ([uvvm.github.io](https://uvvm.github.io/utility_library.html#checks-and-awaits)),
 ported to plain Python for use outside a VHDL simulator.
 
+## Where to go next
+
+- **Quick start + API reference:** keep reading this file.
+- **Learn by example:** [examples/](examples/) — one focused subfolder
+  per feature.
+- **Project docs:** [docs/](docs/) — architecture, full API, extending,
+  release process, and pre-generated `.docx` test reports.
+- **Generate your own docx reports:** install `hwval[docs]` (see below)
+  and see [examples/07_seg_document](examples/07_seg_document).
+
 ---
 
 ## Install
@@ -19,6 +29,15 @@ From a local checkout:
 
 ```bash
 uv pip install -e .
+```
+
+To use `SegDocument` (Jinja2+docx report generation) install the optional
+`docs` extra:
+
+```bash
+uv add hwval[docs]
+# or
+pip install hwval[docs]
 ```
 
 ---
@@ -64,6 +83,56 @@ log / raise behaviour as `check_value`.
 
 Replace the module logger (`logging.getLogger("hwval")`). Useful in tests for
 attaching a capturing handler.
+
+### `SegDocument(test_template, results_template, *[, fields, include_passed, include_failed, filter, extra_context])`
+
+Render two `.docx` test reports (one for *tests performed*, one for *test
+results*) from user-supplied Jinja2+docx templates. Requires the
+`hwval[docs]` extra (pulls in `docxtpl`).
+
+The class holds the two template paths plus the reporting options; the
+actual rendering is done by `SegDocument._generate(...)`.
+
+| Parameter           | Type                                | Default       | Purpose                                                       |
+| ------------------- | ----------------------------------- | ------------- | ------------------------------------------------------------- |
+| `test_template`     | `str` / `Path`                      | —             | Path to the *test performed* `.docx` template                 |
+| `results_template`  | `str` / `Path`                      | —             | Path to the *test results* `.docx` template                   |
+| `fields`            | `Sequence[str]`                     | all fields    | Subset of `CheckRecord` fields exposed to Jinja templates    |
+| `include_passed`    | `bool`                              | `True`        | Include passing records                                       |
+| `include_failed`    | `bool`                              | `True`        | Include failing records                                       |
+| `filter`            | `Callable[[CheckRecord], bool]`     | `None`        | Additional filter; runs after the include toggles             |
+| `extra_context`     | `Mapping[str, Any]`                 | `{}`          | Extra keys merged into the Jinja context                      |
+
+#### `SegDocument._generate(test_output, results_output, *, summary=None) -> Tuple[Path, Path]`
+
+Render both templates and write them to disk. Returns the two output paths.
+
+| Parameter        | Type                          | Default       | Purpose                                                       |
+| ------------------ | ----------------------------- | ------------- | ------------------------------------------------------------- |
+| `test_output`    | `str` / `Path`                | —             | Where to write the *test performed* document                 |
+| `results_output` | `str` / `Path`                | —             | Where to write the *test results* document                   |
+| `summary`        | `TestSummary \| None`         | accumulator   | Source of records; defaults to the current accumulator via `current_summary()` |
+
+Both templates receive the **same** Jinja context, so the only difference
+between the two documents is what you put in each template.
+
+Available placeholders:
+
+| Name              | Type                              | Meaning                                                |
+| ----------------- | --------------------------------- | ------------------------------------------------------ |
+| `summary`         | `TestSummary` (filtered)          | Counts + filtered `passed`/`failed` dicts              |
+| `passed`          | `list[dict]`                      | Filtered passing records, projected onto `fields`      |
+| `failed`          | `list[dict]`                      | Filtered failing records, projected onto `fields`      |
+| `records`         | `list[dict]`                      | `passed + failed`                                      |
+| `fields`          | `list[str]`                       | Echo of the field names (handy for header rows)        |
+| `include_passed`  | `bool`                            | Echo of the toggle                                      |
+| `include_failed`  | `bool`                            | Echo of the toggle                                      |
+| `generated_at`    | `str` (ISO 8601 UTC)              | Render time                                             |
+| anything else     | —                                 | From `extra_context`                                    |
+
+Note: each `dict` only has the keys listed in `fields` — anything you
+omit is invisible to the template, so this is also how you control what
+appears in the report's tables.
 
 ### `report_test_summary(*, file=sys.stdout, reset=True, fail_on_failed=False) -> TestSummary`
 
@@ -316,6 +385,55 @@ For pytest fixtures, put `reset_test_summary()` in `setUp` so each test
 starts with a fresh accumulator. Use `fail_on_failed=True` to turn a
 non-zero summary into a regular test failure.
 
+### 9. Generate docx reports with `SegDocument`
+
+Render a pair of Word documents (test performed + test results) from
+Jinja2+docx templates. The user supplies both `.docx` templates, and the
+library fills in the records.
+
+```python
+from hwval import SegDocument
+
+doc = SegDocument(
+    test_template="templates/test_performed.docx",
+    results_template="templates/test_results.docx",
+    fields=("msg", "scope", "msg_id", "passed", "detail"),
+    filter=lambda r: r.scope == "reg_walk",          # only reg_walk records
+    include_failed=True,
+    extra_context={"project": "Acme DUT v3", "operator": "alice"},
+)
+
+test_path, results_path = doc._generate(
+    test_output="out/test_performed.docx",
+    results_output="out/test_results.docx",
+)
+```
+
+A *test performed* template body might look like:
+
+```
+Project: {{ project }}
+Operator: {{ operator }}
+Generated: {{ generated_at }}
+
+Tests performed: {{ summary.total }}
+{%p for rec in records %}{{ rec.msg_id }} — {{ rec.scope }}: {{ rec.msg }}
+{%p endfor %}
+```
+
+A *test results* template body might look like:
+
+```
+Total: {{ summary.total }}  Passed: {{ summary.passed_count }}  Failed: {{ summary.failed_count }}
+{%p for rec in failed %}{{ rec.msg_id }} — {{ rec.msg }}
+    {{ rec.detail }}
+{%p endfor %}
+```
+
+`{%p ... %}` is docxtpl's paragraph-level control: the loop body becomes
+one paragraph per record. If you want table-style output, build a Word
+table in your template and use `{%tr ... %}` (column iteration) instead.
+
 ---
 
 ## Severity reference
@@ -345,5 +463,11 @@ raise `NotImplementedError`. Port to cocotb if you need them.
 
 ```bash
 uv sync           # one-time venv + dev deps
-uv run pytest     # 27 tests
+uv run pytest     # 42 tests
+
+# Run the example scripts (one per feature)
+for d in examples/0?_*/; do uv run python "$d/example.py"; done
+
+# Regenerate the project-level docx test reports
+uv run python docs/generated/generate.py
 ```

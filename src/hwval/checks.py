@@ -212,6 +212,19 @@ def reset_test_summary() -> None:
     _summary_records.clear()
 
 
+def current_summary() -> TestSummary:
+    """Return a snapshot of the current WARNING-test accumulator.
+
+    Unlike :func:`report_test_summary`, this does not print and does not
+    reset the accumulator. Useful for downstream tooling that wants the
+    accumulated records without consuming them (e.g.
+    :class:`hwval.docs.SegDocument`).
+    """
+    passed = [r for r in _summary_records if r.passed]
+    failed = [r for r in _summary_records if not r.passed]
+    return TestSummary(passed=passed, failed=failed)
+
+
 def report_test_summary(
     *,
     file: Optional[TextIO] = None,

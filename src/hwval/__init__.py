@@ -14,6 +14,7 @@ from .checks import (
     TestSummary,
     check_value,
     check_value_in_range,
+    current_summary,
     report_test_summary,
     reset_test_summary,
     set_logger,
@@ -24,10 +25,20 @@ __all__ = [
     "CheckRecord",
     "MatchStrictness",
     "Radix",
+    "SegDocument",
     "TestSummary",
     "check_value",
     "check_value_in_range",
+    "current_summary",
     "report_test_summary",
     "reset_test_summary",
     "set_logger",
 ]
+
+# `SegDocument` lives in the optional `hwval.docs` submodule; importing
+# it eagerly would force a docxtpl dependency on every user, so the name
+# is exposed lazily.
+try:
+    from .docs import SegDocument  # noqa: F401
+except ImportError:  # pragma: no cover - optional extra missing
+    pass
