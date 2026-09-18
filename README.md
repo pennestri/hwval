@@ -65,6 +65,47 @@ log / raise behaviour as `check_value`.
 Replace the module logger (`logging.getLogger("hwval")`). Useful in tests for
 attaching a capturing handler.
 
+### `report_test_summary(*, file=sys.stdout, reset=True, fail_on_failed=False) -> TestSummary`
+
+Print and return a summary of every `WARNING` / `TB_WARNING` check observed
+since the last reset (or process start). Each `check_value` and
+`check_value_in_range` call at warning severity is recorded in module state
+and surfaced here, both passing and failing.
+
+| Parameter        | Type      | Default        | Purpose                                          |
+| ---------------- | --------- | -------------- | ------------------------------------------------ |
+| `file`           | `TextIO`  | `sys.stdout`   | Output stream. Pass `io.StringIO()` to capture.  |
+| `reset`          | `bool`    | `True`         | Clear the accumulator after reporting.           |
+| `fail_on_failed` | `bool`    | `False`        | Raise `AssertionError` if any WARNING failed.    |
+
+The returned `TestSummary` exposes `passed`, `failed` (`list[CheckRecord]`),
+`passed_count`, `failed_count`, `total`, and an `ok` convenience flag.
+
+### `reset_test_summary()`
+
+Clear the WARNING-test summary accumulator. Useful in test fixtures to start
+each case from a clean slate.
+
+### `CheckRecord` / `TestSummary`
+
+Dataclasses returned by the summary API.
+
+```python
+@dataclass(frozen=True)
+class CheckRecord:
+    scope: str
+    msg_id: str
+    msg: str
+    passed: bool
+    detail: str
+
+@dataclass
+class TestSummary:
+    passed: List[CheckRecord]
+    failed: List[CheckRecord]
+    # properties: passed_count, failed_count, total, ok
+```
+
 ### Enums
 
 ```python
@@ -217,6 +258,64 @@ def test_loopback_full_range(dut):
 The first mismatch raises `AssertionError`, so the loop aborts at the
 earliest failure with a clear message.
 
+### 8. Summarise every WARNING check with `report_test_summary`
+
+WARNING-level checks don't raise, so a single mismatch is silent. Use
+`report_test_summary()` at the end of a test (or session) to see every
+WARNING check that ran — both passing and failing.
+
+```python
+from hwval import (
+    AlertLevel,
+    check_value,
+    check_value_in_range,
+    report_test_summary,
+    reset_test_summary,
+)
+
+def test_register_walk(dut):
+    reset_test_summary()  # start with a clean accumulator
+
+    for reg in dut.registers:
+        value = dut.bus.read(reg)
+        check_value(
+            value, reg.expected,
+            alert_level=AlertLevel.WARNING,
+            msg=f"{reg.name} read-back",
+            scope="reg_walk",
+            msg_id="ID_REG_WALK",
+        )
+        check_value_in_range(
+            value, 0, 0xFFFF,
+            alert_level=AlertLevel.WARNING,
+            msg=f"{reg.name} range",
+        )
+
+    summary = report_test_summary()
+    assert summary.ok, f"{summary.failed_count} WARNING check(s) failed"
+```
+
+Output looks like:
+
+```
+Test Summary: 7 passed, 2 failed
+
+FAILED (2):
+  [reg_walk] ID_REG_WALK REG07 read-back
+      value=5 expected=8
+  [C_TB_SCOPE_DEFAULT] ID_POS_ACK REG12 range
+      value=70000 expected=in [0, 65535]
+
+PASSED (7):
+  [reg_walk] ID_REG_WALK REG00 read-back
+      value=0 expected=0
+  ...
+```
+
+For pytest fixtures, put `reset_test_summary()` in `setUp` so each test
+starts with a fresh accumulator. Use `fail_on_failed=True` to turn a
+non-zero summary into a regular test failure.
+
 ---
 
 ## Severity reference
@@ -246,5 +345,5 @@ raise `NotImplementedError`. Port to cocotb if you need them.
 
 ```bash
 uv sync           # one-time venv + dev deps
-uv run pytest     # 14 tests
+uv run pytest     # 27 tests
 ```

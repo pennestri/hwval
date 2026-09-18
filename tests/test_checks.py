@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import unittest
 
 from hwval import (
     AlertLevel,
+    CheckRecord,
     MatchStrictness,
     Radix,
+    TestSummary,
     check_value,
     check_value_in_range,
+    report_test_summary,
+    reset_test_summary,
     set_logger,
 )
 
@@ -31,9 +36,11 @@ class UvvmCheckTests(unittest.TestCase):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(self.handler)
         set_logger(logger)
+        reset_test_summary()
 
     def tearDown(self) -> None:
         logging.getLogger("hwval").removeHandler(self.handler)
+        reset_test_summary()
 
     # ---- check_value ----------------------------------------------------- #
 
@@ -115,6 +122,120 @@ class UvvmCheckTests(unittest.TestCase):
             with self.subTest(fn=fn.__name__):
                 with self.assertRaises(NotImplementedError):
                     fn()
+
+    # ---- report_test_summary -------------------------------------------- #
+
+    def test_warning_passing_check_is_recorded(self):
+        check_value(7, 7, alert_level=AlertLevel.WARNING, msg="ok")
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.passed_count, 1)
+        self.assertEqual(summary.failed_count, 0)
+        self.assertTrue(summary.ok)
+        self.assertEqual(summary.total, 1)
+        self.assertEqual(len(summary.passed), 1)
+        self.assertIsInstance(summary.passed[0], CheckRecord)
+        self.assertEqual(summary.passed[0].msg, "ok")
+        self.assertTrue(summary.passed[0].passed)
+
+    def test_warning_failing_check_is_recorded(self):
+        check_value(1, 2, alert_level=AlertLevel.WARNING, msg="bad")
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.failed_count, 1)
+        self.assertEqual(summary.passed_count, 0)
+        self.assertFalse(summary.ok)
+        self.assertEqual(summary.failed[0].msg, "bad")
+        self.assertFalse(summary.failed[0].passed)
+
+    def test_tb_warning_alias_also_tracked(self):
+        check_value(1, 2, alert_level=AlertLevel.TB_WARNING, msg="tb warn")
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.failed_count, 1)
+
+    def test_error_level_checks_are_not_tracked(self):
+        # ERROR raises and must not pollute the summary.
+        with self.assertRaises(AssertionError):
+            check_value(1, 2, alert_level=AlertLevel.ERROR, msg="err")
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.total, 0)
+
+    def test_note_and_info_levels_are_not_tracked(self):
+        # Only WARNING / TB_WARNING are accumulated by default.
+        check_value(1, 2, alert_level=AlertLevel.NOTE, msg="n")
+        check_value(1, 2, alert_level=AlertLevel.INFO, msg="i")
+        check_value(1, 2, alert_level=AlertLevel.DEBUG, msg="d")
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.total, 0)
+
+    def test_range_warning_checks_are_tracked(self):
+        check_value_in_range(200, 10, 100, alert_level=AlertLevel.WARNING, msg="too high")
+        check_value_in_range(50, 10, 100, alert_level=AlertLevel.WARNING, msg="inside")
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.failed_count, 1)
+        self.assertEqual(summary.passed_count, 1)
+
+    def test_report_resets_by_default(self):
+        check_value(1, 2, alert_level=AlertLevel.WARNING, msg="once")
+        first = report_test_summary(file=io.StringIO())
+        self.assertEqual(first.total, 1)
+        second = report_test_summary(file=io.StringIO())
+        self.assertEqual(second.total, 0)
+
+    def test_report_keeps_state_when_reset_false(self):
+        check_value(1, 2, alert_level=AlertLevel.WARNING, msg="once")
+        first = report_test_summary(file=io.StringIO(), reset=False)
+        self.assertEqual(first.total, 1)
+        second = report_test_summary(file=io.StringIO(), reset=False)
+        self.assertEqual(second.total, 1)
+        # finally clean up
+        reset_test_summary()
+
+    def test_reset_test_summary_clears_accumulator(self):
+        check_value(1, 2, alert_level=AlertLevel.WARNING, msg="x")
+        reset_test_summary()
+        summary = report_test_summary(file=io.StringIO())
+        self.assertEqual(summary.total, 0)
+
+    def test_report_fail_on_failed_raises(self):
+        check_value(1, 2, alert_level=AlertLevel.WARNING, msg="boom")
+        with self.assertRaises(AssertionError):
+            report_test_summary(file=io.StringIO(), fail_on_failed=True)
+
+    def test_report_fail_on_failed_passes_when_clean(self):
+        check_value(7, 7, alert_level=AlertLevel.WARNING, msg="ok")
+        # Should not raise.
+        summary = report_test_summary(
+            file=io.StringIO(), fail_on_failed=True
+        )
+        self.assertTrue(summary.ok)
+
+    def test_report_prints_to_provided_file(self):
+        check_value(1, 2, alert_level=AlertLevel.WARNING, msg="bad")
+        check_value(7, 7, alert_level=AlertLevel.WARNING, msg="good")
+        buf = io.StringIO()
+        report_test_summary(file=buf)
+        text = buf.getvalue()
+        self.assertIn("Test Summary: 1 passed, 1 failed", text)
+        self.assertIn("FAILED (1):", text)
+        self.assertIn("PASSED (1):", text)
+        self.assertIn("bad", text)
+        self.assertIn("good", text)
+
+    def test_record_carries_scope_msg_id_detail(self):
+        check_value(
+            1, 2,
+            alert_level=AlertLevel.WARNING,
+            msg="drift",
+            scope="counter",
+            msg_id="ID_DRIFT",
+            radix=Radix.DEC,
+        )
+        summary = report_test_summary(file=io.StringIO())
+        rec = summary.failed[0]
+        self.assertEqual(rec.scope, "counter")
+        self.assertEqual(rec.msg_id, "ID_DRIFT")
+        self.assertEqual(rec.msg, "drift")
+        self.assertIn("value=1", rec.detail)
+        self.assertIn("expected=2", rec.detail)
 
 
 if __name__ == "__main__":

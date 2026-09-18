@@ -11,8 +11,10 @@ Behaviour:
 from __future__ import annotations
 
 import logging
+import sys
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Sequence
+from typing import Any, List, Optional, Sequence, TextIO
 
 
 # --------------------------------------------------------------------------- #
@@ -84,6 +86,54 @@ _RAISING_LEVELS: frozenset[AlertLevel] = frozenset(
     {AlertLevel.TB_FAILURE, AlertLevel.FAILURE, AlertLevel.TB_ERROR, AlertLevel.ERROR}
 )
 
+# Alert levels whose outcomes are accumulated for `report_test_summary`.
+_TRACKED_LEVELS: frozenset[AlertLevel] = frozenset(
+    {AlertLevel.TB_WARNING, AlertLevel.WARNING}
+)
+
+
+@dataclass(frozen=True)
+class CheckRecord:
+    """A single WARNING-level check outcome, recorded for `report_test_summary`."""
+
+    scope: str
+    msg_id: str
+    msg: str
+    passed: bool
+    detail: str
+
+
+_summary_records: List[CheckRecord] = []
+
+
+@dataclass
+class TestSummary:
+    """Structured result returned by `report_test_summary`."""
+
+    # pytest collects classes named Test* by default; opt out so users can
+    # import this freely without pytest complaint.
+    __test__ = False
+
+    passed: List[CheckRecord] = field(default_factory=list)
+    failed: List[CheckRecord] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.passed) + len(self.failed)
+
+    @property
+    def passed_count(self) -> int:
+        return len(self.passed)
+
+    @property
+    def failed_count(self) -> int:
+        return len(self.failed)
+
+    @property
+    def ok(self) -> bool:
+        """True iff there are no failed WARNING checks."""
+        return not self.failed
+
 
 def set_logger(logger: logging.Logger) -> None:
     """Replace the module logger (used by tests to attach handlers)."""
@@ -137,8 +187,98 @@ def _emit(
 
     _logger.log(level, "%s%s", head, detail)
 
+    if alert_level in _TRACKED_LEVELS:
+        _summary_records.append(
+            CheckRecord(
+                scope=scope,
+                msg_id=msg_id,
+                msg=msg,
+                passed=passed,
+                detail=detail,
+            )
+        )
+
     if not passed and alert_level in _RAISING_LEVELS:
         raise AssertionError(f"{head}{detail}")
+
+
+# --------------------------------------------------------------------------- #
+# Test summary (public API)                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def reset_test_summary() -> None:
+    """Clear the WARNING-test summary accumulator."""
+    _summary_records.clear()
+
+
+def report_test_summary(
+    *,
+    file: Optional[TextIO] = None,
+    reset: bool = True,
+    fail_on_failed: bool = False,
+) -> TestSummary:
+    """Print and return a summary of WARNING-level checks seen so far.
+
+    Both `check_value` and `check_value_in_range` accumulate their
+    `WARNING`/`TB_WARNING` outcomes in module state. This function prints the
+    accumulated checks (passing and failing) and, by default, clears the
+    accumulator.
+
+    Parameters
+    ----------
+    file:
+        Stream to write the human-readable report to. Defaults to
+        `sys.stdout`. Pass `io.StringIO()` to capture without printing.
+    reset:
+        Clear the accumulator after reporting. Default `True`.
+    fail_on_failed:
+        Raise `AssertionError` if any WARNING check failed. Default `False`,
+        leaving the decision to the caller (the returned `TestSummary.ok`
+        flag is a non-raising alternative).
+
+    Returns
+    -------
+    TestSummary
+        Structured result with `passed` and `failed` `CheckRecord` lists and
+        convenience counts (`passed_count`, `failed_count`, `total`, `ok`).
+    """
+    if file is None:
+        file = sys.stdout
+
+    passed = [r for r in _summary_records if r.passed]
+    failed = [r for r in _summary_records if not r.passed]
+
+    print(
+        f"Test Summary: {len(passed)} passed, {len(failed)} failed",
+        file=file,
+    )
+
+    if failed:
+        print(f"\nFAILED ({len(failed)}):", file=file)
+        for r in failed:
+            head = f"[{r.scope}] {r.msg_id} {r.msg}".rstrip(": ")
+            print(f"  {head}", file=file)
+            print(f"    {r.detail}", file=file)
+
+    if passed:
+        print(f"\nPASSED ({len(passed)}):", file=file)
+        for r in passed:
+            head = f"[{r.scope}] {r.msg_id} {r.msg}".rstrip(": ")
+            print(f"  {head}", file=file)
+            print(f"    {r.detail}", file=file)
+
+    summary = TestSummary(passed=passed, failed=failed)
+
+    if reset:
+        _summary_records.clear()
+
+    if fail_on_failed and failed:
+        raise AssertionError(
+            f"{len(failed)} WARNING check(s) failed; see {file} for details"
+        )
+
+    return summary
 
 
 # --------------------------------------------------------------------------- #

@@ -8,18 +8,26 @@ Only the `check_value` / `check_value_in_range` family is ported.
 
 from .checks import (
     AlertLevel,
+    CheckRecord,
     MatchStrictness,
     Radix,
+    TestSummary,
     check_value,
     check_value_in_range,
+    report_test_summary,
+    reset_test_summary,
     set_logger,
 )
 
 __all__ = [
     "AlertLevel",
+    "CheckRecord",
     "MatchStrictness",
     "Radix",
+    "TestSummary",
     "check_value",
     "check_value_in_range",
+    "report_test_summary",
+    "reset_test_summary",
     "set_logger",
 ]
