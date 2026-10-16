@@ -161,17 +161,24 @@ class CheckRecord:
     scope: str
     msg_id: str
     msg: str
-    passed: bool
-    detail: str
-    test_id: str = ""
+    passed: bool = True            # default = "no failure reported"
+    detail: str = ""               # one-liner produced by _emit
+    test_id: str = ""              # populated by set_test_id_function
     extras: Mapping[str, Any] = field(default_factory=dict)
+    value: Any = None              # the operand the check compared
+    expected: Any = None           # the literal target / "in [min, max]"
 ```
 
 `test_id` is filled in by the active test_id function (see
-`set_test_id_function` above). `extras` carries any user-supplied
-YML-declared fields passed as ``**kwargs`` to
-:func:`hwval.check_value` / :func:`hwval.check_value_in_range`; the
-YML decides whether each extra is rendered (and in which report).
+`set_test_id_function` above). `value` and `expected` are the
+operands the check compared — `expected` is the literal target
+for `check_value` and the `"in [min, max]"` string for
+`check_value_in_range`. Both default to `None` so a `CheckRecord`
+can be built without them (e.g. for a pure "this happened" marker
+without a value). `extras` carries any user-supplied YML-declared
+fields passed as ``**kwargs`` to :func:`hwval.check_value` /
+:func:`hwval.check_value_in_range`; the YML decides whether each
+extra is rendered (and in which report).
 
 ### `class FieldSpec`
 

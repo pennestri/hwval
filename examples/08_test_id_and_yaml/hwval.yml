@@ -4,12 +4,16 @@
 # with `name` and `reports` keys. `reports` accepts a single string
 # ("test_performed", "test_results", "all") or a list of those.
 #
-# `test_id` and `operator` end up in both reports; `msg_id` is only
-# in test_performed (the test plan view); `msg` and `detail` are
-# only in test_results (the per-failure dump).
+# `test_id`, `value`, `expected`, `passed` and `operator` end up in
+# both reports; `msg_id` is only in test_performed (the test plan
+# view); `msg` and `detail` are only in test_results (the per-failure
+# dump).
 
 fields:
   - test_id                                    # both reports
+  - value                                      # both reports
+  - expected                                   # both reports
+  - passed                                     # both reports
   - name: msg_id
     reports: test_performed
   - name: msg

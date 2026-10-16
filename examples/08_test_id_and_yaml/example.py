@@ -10,7 +10,9 @@ This script:
   1. Loads the SegDocument config from ``hwval.yml`` next to it.
      The YML scopes each field to either the test_performed report
      or the test_results report (or both).
-  2. Runs a few WARNING checks via ``check_value``. Two of them pass
+  2. Runs a battery of WARNING checks: ``check_value`` for
+     register-style reads, ``check_value_in_range`` for
+     "value must be inside a band" checks. Two of them pass
      ``operator="..."`` and ``seq_id="..."`` as ``**extras``; the
      YML declares ``operator`` (both reports) but not ``seq_id``,
      so ``seq_id`` is stored but never rendered.
@@ -50,6 +52,7 @@ from hwval import (
     AlertLevel,
     SegDocument,
     check_value,
+    check_value_in_range,
     reset_test_summary,
 )
 
@@ -59,7 +62,14 @@ CONFIG = HERE / "hwval.yml"
 
 
 def _build_template(path: Path, paragraphs: list[str]) -> None:
-    """Each entry in ``paragraphs`` becomes one paragraph in the docx."""
+    """Each entry in ``paragraphs`` becomes one paragraph in the docx.
+
+    NOTE: This helper builds a *minimal* template programmatically so
+    the example is self-contained. In a real project, you'll have
+    hand-crafted .docx templates (with Word tables, headers, footers,
+    styles, etc.) that you load from disk. See the comment block in
+    ``main()`` below for the "load from path" pattern.
+    """
     doc = Document()
     for text in paragraphs:
         doc.add_paragraph(text)
@@ -83,7 +93,8 @@ def _build_templates(tmp: Path) -> tuple[Path, Path]:
             "Tests performed: {{ summary.total }}",
             "{%p for rec in records %}",
             "  - [{{ rec.test_id }}] "
-            "[{{ rec.msg_id }}] op={{ rec.operator }}",
+            "[{{ rec.msg_id }}] op={{ rec.operator }} "
+            "value={{ rec.value }} expected={{ rec.expected }}",
             "{%p endfor %}",
         ],
     )
@@ -110,11 +121,13 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         test_tpl, results_tpl = _build_templates(Path(tmp))
 
-        # --- 2. Run a few WARNING checks -------------------------------
+        # --- 2. Run a battery of WARNING checks -----------------------
         # Some records pass `operator=` (declared in YML) and one
         # record also passes `seq_id=` (NOT declared in YML → stored
         # on the record but never rendered in the report).
         reset_test_summary()
+
+        # --- 2a. check_value: register read-back style ----------------
         check_value(0xDEAD, 0xDEAD, alert_level=AlertLevel.WARNING,
                     msg="REG0 OK", scope="reg_walk", msg_id="ID_REG0",
                     operator="alice")
@@ -129,6 +142,22 @@ def main() -> None:
         # contract).
         check_value(0x9999, 0x0001, alert_level=AlertLevel.WARNING,
                     msg="REG3 mismatch", scope="reg_walk", msg_id="ID_REG3")
+
+        # --- 2b. check_value_in_range: "value must be inside a band" --
+        check_value_in_range(
+            1500, 0, 4095,
+            alert_level=AlertLevel.WARNING,
+            msg="ADC0 sample inside 12-bit band",
+            scope="adc", msg_id="ID_ADC0",
+            operator="alice",
+        )
+        check_value_in_range(
+            5000, 0, 4095,
+            alert_level=AlertLevel.WARNING,
+            msg="ADC1 sample out of band (expected)",
+            scope="adc", msg_id="ID_ADC1",
+            operator="bob",
+        )
 
         # --- 3. Build the SegDocument straight from the YAML ----------
         # No fields=, no test_id_function=, no toggles in Python. The
@@ -162,6 +191,48 @@ def main() -> None:
             for p in rendered.paragraphs:
                 if p.text.strip():
                     print(p.text)
+
+
+# --------------------------------------------------------------------------- #
+# Loading a .docx template from a given path
+# --------------------------------------------------------------------------- #
+#
+# The example above builds its templates programmatically so it's
+# self-contained, but in a real project you'll have a pair of
+# hand-crafted .docx templates (with Word tables, headers, footers,
+# styles, etc.) living on disk. To use those, just point the
+# SegDocument constructor at the file paths:
+#
+#     from hwval import SegDocument
+#
+#     doc = SegDocument(
+#         test_template="templates/test_performed.docx",
+#         results_template="templates/test_results.docx",
+#         config="hwval.yml",          # or pass fields=/toggles= here
+#     )
+#     doc._generate(
+#         test_output="out/test_performed.docx",
+#         results_output="out/test_results.docx",
+#     )
+#
+# The .docx files you point at must be valid Word documents
+# containing Jinja2 placeholders (use the docxtpl dialect):
+#
+#   * ``{{ var }}`` for variables (``{{ project }}``, ``{{ generated_at }}``,
+#     ``{{ rec.msg }}``, ``{{ fields|join(', ') }}``, ...).
+#   * ``{%p ... %}`` for *paragraph-level* control: each loop
+#     iteration becomes its own paragraph in the rendered document.
+#     Use this for free-form "one paragraph per record" reports.
+#   * ``{%tr ... %}`` for *table-row* iteration when the iteration
+#     should add rows to an existing Word table.
+#   * ``{%tc ... %}`` for *table-cell* iteration when each record
+#     maps to one column inside a single row.
+#
+# The available Jinja placeholders are documented in
+# ``SegDocument._generate``. The most useful ones for per-record
+# rows are ``rec.<field-name>`` for every YML-declared field —
+# including the auto-populated built-ins ``rec.value`` and
+# ``rec.expected`` and the user-supplied ``rec.<extra-name>``.
 
 
 if __name__ == "__main__":

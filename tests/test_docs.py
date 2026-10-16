@@ -589,6 +589,37 @@ class SegDocumentTests(unittest.TestCase):
         self.assertEqual([f.name for f in results_],
                          ["test_id", "msg", "operator"])
 
+    def test_value_and_expected_render_in_report(self):
+        # `value` and `expected` are now part of CheckRecord, so
+        # a YML-declared field can pull them straight into a row.
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "val.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.test_id }}|{{ rec.value }}|{{ rec.expected }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "val_out.docx"
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=("test_id", "value", "expected"),
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        # setUp pre-populates with (1, 1) (pass), (2, 3) (fail),
+        # (255, 255) (pass), (66, 67) (fail) — see test_docs.py
+        # setUp. So value/expected are real numbers in each row.
+        self.assertIn("TID_0001|1|1", text)
+        self.assertIn("TID_0002|2|3", text)
+        self.assertIn("TID_0003|255|255", text)
+        self.assertIn("TID_0004|66|67", text)
+
     # ---- error paths ----------------------------------------------------- #
 
     def test_missing_template_raises(self):

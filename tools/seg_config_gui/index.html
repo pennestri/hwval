@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>hwval SegDocument · YML Config Generator</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --border: #e1e4e8;
+    --border-strong: #c8cdd3;
+    --text: #1f2328;
+    --text-soft: #57606a;
+    --accent: #0969da;
+    --accent-hover: #0860c7;
+    --danger: #cf222e;
+    --ok: #1a7f37;
+    --code-bg: #f6f8fa;
+    --row-hover: #f0f3f6;
+    --shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px; line-height: 1.5; }
+  .container { max-width: 980px; margin: 0 auto; padding: 24px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h1 .accent { color: var(--accent); }
+  .subtitle { color: var(--text-soft); margin: 0 0 24px; font-size: 13px; }
+  h2 { font-size: 16px; margin: 0 0 12px; padding-bottom: 6px;
+       border-bottom: 1px solid var(--border); }
+  h2 .step { color: var(--text-soft); font-weight: normal; margin-right: 6px; }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 6px; padding: 16px 20px; margin-bottom: 16px;
+          box-shadow: var(--shadow); }
+  .hint { color: var(--text-soft); font-size: 12.5px; margin: 0 0 12px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         font-size: 12.5px; background: var(--code-bg);
+         padding: 1px 5px; border-radius: 3px; }
+  pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px; background: var(--code-bg);
+        border: 1px solid var(--border); border-radius: 6px;
+        padding: 12px 14px; margin: 0; overflow-x: auto;
+        white-space: pre; min-height: 120px; }
+  label { display: block; margin-bottom: 10px; color: var(--text); }
+  label input[type="text"] { display: block; width: 100%; max-width: 480px;
+    margin-top: 4px; padding: 6px 8px; border: 1px solid var(--border-strong);
+    border-radius: 4px; font-family: inherit; font-size: 13px; }
+  label.checkbox { display: flex; align-items: center; gap: 6px; }
+  label.checkbox input { margin: 0; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid var(--border-strong);
+    background: #f6f8fa; color: var(--text); border-radius: 4px; cursor: pointer; }
+  button:hover { background: #eef1f4; }
+  button.primary { background: var(--accent); color: #fff;
+    border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-hover); }
+  button.small { padding: 3px 8px; font-size: 12px; }
+  button.danger { color: var(--danger); border-color: #f1c0c4; }
+  button.danger:hover { background: #fff5f5; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  th, td { padding: 6px 8px; text-align: left; vertical-align: middle; }
+  th { font-size: 12px; color: var(--text-soft); font-weight: 600;
+       border-bottom: 1px solid var(--border); }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:hover { background: var(--row-hover); }
+  tbody tr.dragging { opacity: 0.5; }
+  tbody tr.drag-over { outline: 2px dashed var(--accent);
+                        outline-offset: -2px; }
+  td input[type="text"], td select { width: 100%; padding: 4px 6px;
+    border: 1px solid var(--border-strong); border-radius: 3px;
+    font-family: inherit; font-size: 13px; background: #fff; }
+  td.handle { width: 24px; cursor: grab; color: var(--text-soft);
+              text-align: center; user-select: none; }
+  td.handle:active { cursor: grabbing; }
+  td.actions-cell { width: 80px; text-align: right; }
+  .add-row { display: flex; gap: 8px; align-items: center; }
+  .add-row select { padding: 5px 8px; border: 1px solid var(--border-strong);
+    border-radius: 4px; background: #fff; font: inherit; }
+  .preset-btn { background: #fff; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11.5px; background: #dafbe1; color: var(--ok); margin-left: 8px;
+    opacity: 0; transition: opacity 0.2s; }
+  .status.show { opacity: 1; }
+  .status.error { background: #ffebe9; color: var(--danger); }
+  .footer { color: var(--text-soft); font-size: 12px;
+            text-align: center; margin-top: 32px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+  .footer a:hover { text-decoration: underline; }
+  details { margin-top: 8px; }
+  details summary { cursor: pointer; color: var(--text-soft);
+                   font-size: 12.5px; }
+  details pre { margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>hwval <span class="accent">SegDocument</span> · YML Config Generator</h1>
+  <p class="subtitle">
+    Build a <code>hwval.yml</code> for <code>SegDocument</code> without
+    hand-editing YAML. Add fields, scope them to a report, and copy the
+    output straight into your project.
+  </p>
+
+  <div class="card">
+    <h2><span class="step">1.</span>Fields</h2>
+    <p class="hint">
+      Each field becomes a column in the rendered <code>.docx</code>.
+      Plain string entries (no <code>reports</code>) appear in both
+      reports; entries with <code>reports</code> are scoped to a
+      single report. Drag the handle to reorder. Field names must be
+      valid Python identifiers (letters, digits, underscores; not
+      starting with a digit).
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Name</th>
+          <th>Reports</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="fields-tbody"></tbody>
+    </table>
+    <div class="add-row">
+      <button id="add-field" class="primary">+ Add Field</button>
+      <span class="hint" style="margin: 0;">or insert:</span>
+      <select id="preset-select">
+        <option value="">— preset —</option>
+        <optgroup label="Built-in CheckRecord fields">
+          <option value="test_id">test_id</option>
+          <option value="value">value</option>
+          <option value="expected">expected</option>
+          <option value="passed">passed</option>
+          <option value="msg">msg</option>
+          <option value="scope">scope</option>
+          <option value="msg_id">msg_id</option>
+          <option value="detail">detail</option>
+        </optgroup>
+        <optgroup label="Common user extras">
+          <option value="operator">operator</option>
+          <option value="notes">notes</option>
+          <option value="address">address</option>
+          <option value="retries">retries</option>
+          <option value="seq_id">seq_id</option>
+        </optgroup>
+      </select>
+      <button id="insert-preset" class="preset-btn small">Insert</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">2.</span>Settings</h2>
+    <label class="checkbox">
+      <input type="checkbox" id="include-passed" checked>
+      <code>include_passed</code> — render passing records
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" id="include-failed" checked>
+      <code>include_failed</code> — render failing records
+    </label>
+    <label>
+      <code>test_id_function</code> (optional)
+      <input type="text" id="test-id-function"
+             placeholder="package.module:make_test_id">
+      <span class="hint" style="margin-top: 4px;">
+        <code>"package.module:attr"</code> reference, same convention as
+        <code>logging.config.dictConfig</code>. Resolved on
+        <code>SegDocument</code> construction; installed globally via
+        <code>set_test_id_function</code>.
+      </span>
+    </label>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">3.</span>Generated YML
+      <span id="status" class="status"></span>
+    </h2>
+    <pre id="yml-output"></pre>
+    <div class="actions">
+      <button id="copy-btn" class="primary">Copy to Clipboard</button>
+      <button id="download-btn">Download hwval.yml</button>
+      <button id="reset-btn" class="danger">Reset to defaults</button>
+    </div>
+    <details>
+      <summary>Show the equivalent Python kwargs</summary>
+      <pre id="py-output"></pre>
+    </details>
+  </div>
+
+  <p class="footer">
+    hwval SegDocument YML generator ·
+    <a href="../../../examples/08_test_id_and_yaml/" target="_blank" rel="noopener">see example 08</a>
+    ·
+    <a href="../../../docs/PUBLIC_API.md" target="_blank" rel="noopener">SegDocument API</a>
+  </p>
+</div>
+
+<script>
+"use strict";
+
+// ----- State ---------------------------------------------------------------
+
+const DEFAULT_FIELDS = [
+  {name: "test_id",  reports: "all"},
+  {name: "msg_id",   reports: "test_performed"},
+  {name: "msg",      reports: "test_results"},
+  {name: "detail",   reports: "test_results"},
+  {name: "value",    reports: "all"},
+  {name: "expected", reports: "all"},
+  {name: "passed",   reports: "all"},
+  {name: "operator", reports: "all"},
+];
+
+const REPORT_OPTIONS = [
+  ["all",            "both reports"],
+  ["test_performed", "test_performed only"],
+  ["test_results",   "test_results only"],
+];
+
+let fields = clone(DEFAULT_FIELDS);
+let dragIndex = null;
+
+// ----- DOM helpers ---------------------------------------------------------
+
+function $(id) { return document.getElementById(id); }
+function clone(x) { return JSON.parse(JSON.stringify(x)); }
+
+// ----- Field row rendering -------------------------------------------------
+
+function fieldRow(field, i) {
+  const tr = document.createElement("tr");
+  tr.draggable = true;
+  tr.dataset.i = String(i);
+
+  const nameCell = document.createElement("td");
+  nameCell.className = "handle";
+  nameCell.textContent = "⋮⋮";
+  nameCell.title = "Drag to reorder";
+
+  const inputCell = document.createElement("td");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = field.name;
+  input.placeholder = "field_name";
+  input.dataset.k = "name";
+  input.addEventListener("input", e => {
+    fields[i].name = e.target.value;
+    updateYml();
+  });
+  inputCell.appendChild(input);
+
+  const reportsCell = document.createElement("td");
+  const select = document.createElement("select");
+  select.dataset.k = "reports";
+  for (const [val, label] of REPORT_OPTIONS) {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = label;
+    if (field.reports === val) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener("change", e => {
+    fields[i].reports = e.target.value;
+    updateYml();
+  });
+  reportsCell.appendChild(select);
+
+  const actionsCell = document.createElement("td");
+  actionsCell.className = "actions-cell";
+  const del = document.createElement("button");
+  del.className = "small danger";
+  del.textContent = "Delete";
+  del.addEventListener("click", () => {
+    fields.splice(i, 1);
+    render();
+  });
+  actionsCell.appendChild(del);
+
+  tr.appendChild(nameCell);
+  tr.appendChild(inputCell);
+  tr.appendChild(reportsCell);
+  tr.appendChild(actionsCell);
+
+  // Drag-and-drop reordering.
+  tr.addEventListener("dragstart", e => {
+    dragIndex = i;
+    tr.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+  });
+  tr.addEventListener("dragend", () => {
+    tr.classList.remove("dragging");
+    document.querySelectorAll("tr.drag-over")
+      .forEach(el => el.classList.remove("drag-over"));
+  });
+  tr.addEventListener("dragover", e => {
+    e.preventDefault();
+    tr.classList.add("drag-over");
+  });
+  tr.addEventListener("dragleave", () => {
+    tr.classList.remove("drag-over");
+  });
+  tr.addEventListener("drop", e => {
+    e.preventDefault();
+    tr.classList.remove("drag-over");
+    if (dragIndex === null || dragIndex === i) return;
+    const moved = fields.splice(dragIndex, 1)[0];
+    fields.splice(i, 0, moved);
+    dragIndex = null;
+    render();
+  });
+
+  return tr;
+}
+
+function render() {
+  const tbody = $("fields-tbody");
+  tbody.innerHTML = "";
+  fields.forEach((f, i) => tbody.appendChild(fieldRow(f, i)));
+  updateYml();
+}
+
+// ----- YML + Python output -------------------------------------------------
+
+function formatField(field) {
+  if (field.reports === "all") {
+    return `  - ${field.name}`;
+  }
+  return `  - name: ${field.name}\n    reports: ${field.reports}`;
+}
+
+function validate() {
+  const seen = new Set();
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    const name = (f.name || "").trim();
+    if (!name) {
+      return {ok: false, msg: `field #${i + 1}: name is empty`};
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      return {
+        ok: false,
+        msg: `field "${name}": not a valid Python identifier`,
+      };
+    }
+    if (!REPORT_OPTIONS.some(([v]) => v === f.reports)) {
+      return {ok: false, msg: `field "${name}": invalid reports value`};
+    }
+    if (seen.has(name)) {
+      return {ok: false, msg: `duplicate field name: ${name}`};
+    }
+    seen.add(name);
+  }
+  const tif = $("test-id-function").value.trim();
+  if (tif && !/^[\w.]+:[\w.]+$/.test(tif)) {
+    return {
+      ok: false,
+      msg: `test_id_function must be "package.module:attr" form`,
+    };
+  }
+  return {ok: true};
+}
+
+function buildYml() {
+  const lines = ["fields:"];
+  fields.forEach(f => lines.push(formatField(f)));
+  lines.push("");
+  lines.push(`include_passed: ${$("include-passed").checked ? "true" : "false"}`);
+  lines.push(`include_failed: ${$("include-failed").checked ? "true" : "false"}`);
+  const tif = $("test-id-function").value.trim();
+  if (tif) {
+    lines.push("");
+    lines.push(`test_id_function: "${tif}"`);
+  }
+  lines.push("");  // trailing newline
+  return lines.join("\n");
+}
+
+function buildPy() {
+  const parts = ["from hwval import SegDocument", "",
+                 "doc = SegDocument(",
+                 "    test_template=\"templates/test_performed.docx\",",
+                 "    results_template=\"templates/test_results.docx\","];
+  if (fields.length > 0) {
+    parts.push("    fields=[");
+    fields.forEach(f => {
+      if (f.reports === "all") {
+        parts.push(`        "${f.name}",`);
+      } else {
+        parts.push(`        {"name": "${f.name}", "reports": "${f.reports}"},`);
+      }
+    });
+    parts.push("    ],");
+  }
+  parts.push(`    include_passed=${$("include-passed").checked ? "True" : "False"},`);
+  parts.push(`    include_failed=${$("include-failed").checked ? "True" : "False"},`);
+  const tif = $("test-id-function").value.trim();
+  if (tif) {
+    parts.push(`    test_id_function="${tif}",`);
+  }
+  parts.push(")");
+  return parts.join("\n");
+}
+
+function updateYml() {
+  const v = validate();
+  const status = $("status");
+  if (!v.ok) {
+    status.textContent = "⚠ " + v.msg;
+    status.classList.add("error", "show");
+  } else {
+    status.textContent = "✓ valid";
+    status.classList.remove("error");
+    status.classList.add("show");
+  }
+  $("yml-output").textContent = buildYml();
+  $("py-output").textContent = buildPy();
+}
+
+// ----- Buttons -------------------------------------------------------------
+
+function copyToClipboard() {
+  const text = $("yml-output").textContent;
+  // Clipboard API requires a secure context (https/localhost). Fall
+  // back to a manual textarea trick otherwise.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(flashOk, flashErr);
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); flashOk(); }
+    catch (e) { flashErr(e); }
+    document.body.removeChild(ta);
+  }
+}
+
+function flashOk() {
+  const s = $("status");
+  const prev = s.textContent;
+  s.textContent = "✓ copied";
+  s.classList.remove("error");
+  s.classList.add("show");
+  setTimeout(() => {
+    s.textContent = prev;
+    updateYml();  // restore validity status
+  }, 1200);
+}
+
+function flashErr(err) {
+  const s = $("status");
+  s.textContent = "⚠ copy failed: " + (err && err.message || err);
+  s.classList.add("error", "show");
+}
+
+function downloadYml() {
+  const blob = new Blob([$("yml-output").textContent], {type: "text/yaml"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "hwval.yml";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// ----- Init ----------------------------------------------------------------
+
+$("add-field").addEventListener("click", () => {
+  // Pick a fresh name; avoid clashing with an existing field.
+  let n = 1;
+  let name;
+  do {
+    name = `field_${n}`;
+    n += 1;
+  } while (fields.some(f => f.name === name));
+  fields.push({name, reports: "all"});
+  render();
+});
+
+$("insert-preset").addEventListener("click", () => {
+  const name = $("preset-select").value;
+  if (!name) return;
+  if (fields.some(f => f.name === name)) {
+    const s = $("status");
+    s.textContent = "⚠ already in list: " + name;
+    s.classList.add("error", "show");
+    setTimeout(() => updateYml(), 1500);
+    return;
+  }
+  fields.push({name, reports: "all"});
+  render();
+  $("preset-select").value = "";
+});
+
+$("include-passed").addEventListener("change", updateYml);
+$("include-failed").addEventListener("change", updateYml);
+$("test-id-function").addEventListener("input", updateYml);
+$("copy-btn").addEventListener("click", copyToClipboard);
+$("download-btn").addEventListener("click", downloadYml);
+$("reset-btn").addEventListener("click", () => {
+  if (!confirm("Reset all fields and settings to defaults?")) return;
+  fields = clone(DEFAULT_FIELDS);
+  $("include-passed").checked = true;
+  $("include-failed").checked = true;
+  $("test-id-function").value = "";
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

@@ -97,6 +97,25 @@ _TRACKED_LEVELS: frozenset[AlertLevel] = frozenset(
 class CheckRecord:
     """A single WARNING-level check outcome, recorded for `report_test_summary`.
 
+    The core fields are populated by :func:`check_value` /
+    :func:`check_value_in_range` (or by hand in tests) and stored on
+    the record for later rendering:
+
+    * ``scope`` / ``msg_id`` / ``msg`` — the user-supplied tags the
+      ``check_*`` call was made with.
+    * ``value`` / ``expected`` — the operands the check compared.
+      ``expected`` is the literal target for ``check_value`` and the
+      ``"in [min, max]"`` string for ``check_value_in_range``. Both
+      default to ``None`` so a ``CheckRecord`` can be built without
+      them (e.g. for a pure "this happened" marker).
+    * ``passed`` — ``True`` if the check passed, ``False`` otherwise.
+      Defaults to ``True`` so a record that records the *fact* a
+      check ran but for which the result is unknown (e.g. an
+      in-test trace marker) is not silently mis-classified as a
+      failure.
+    * ``detail`` — the human-readable one-liner ``_emit`` produces
+      (``value=0x2A expected=0x2A`` etc.). Defaults to ``""``.
+
     `test_id` is derived at accumulation time by the user-supplied
     :data:`test_id_function` (or, by default, a sequential
     ``"TID_<seq>"``). The function receives the record (with
@@ -117,10 +136,12 @@ class CheckRecord:
     scope: str
     msg_id: str
     msg: str
-    passed: bool
-    detail: str
+    passed: bool = True
+    detail: str = ""
     test_id: str = ""
     extras: Mapping[str, Any] = field(default_factory=dict)
+    value: Any = None
+    expected: Any = None
 
 
 _summary_records: List[CheckRecord] = []
@@ -310,6 +331,8 @@ def _emit(
             passed=passed,
             detail=detail,
             extras=extras_dict,
+            value=value,
+            expected=exp,
         )
         # Apply the user-supplied test_id function (or the default).
         # The function may rely on any of the record's fields plus the

@@ -421,6 +421,63 @@ class UvvmCheckTests(unittest.TestCase):
         )
         self.assertEqual(rec.extras, {})
 
+    # ---- value / expected on CheckRecord ------------------------------ #
+
+    def test_checkrecord_stores_value_and_expected(self):
+        check_value(
+            1, 2,
+            alert_level=AlertLevel.WARNING,
+            msg="drift", scope="counter", msg_id="ID_DRIFT",
+        )
+        s = report_test_summary(file=io.StringIO())
+        rec = s.failed[0]
+        self.assertEqual(rec.value, 1)
+        self.assertEqual(rec.expected, 2)
+
+    def test_checkrecord_value_expected_for_range_check(self):
+        check_value_in_range(
+            50, 10, 100,
+            alert_level=AlertLevel.WARNING, msg="inside",
+        )
+        s = report_test_summary(file=io.StringIO())
+        rec = s.passed[0]
+        self.assertEqual(rec.value, 50)
+        # Range checks expose the bounds as a literal "in [min, max]"
+        # string — matches what report_test_summary would show.
+        self.assertEqual(rec.expected, "in [10, 100]")
+
+    def test_checkrecord_value_expected_default_to_none(self):
+        # Constructing without value/expected is fine (the user's
+        # spec: pass them with defaults so you can build a "marker"
+        # record without them).
+        rec = CheckRecord(scope="s", msg_id="i", msg="m")
+        self.assertIsNone(rec.value)
+        self.assertIsNone(rec.expected)
+
+    def test_checkrecord_passed_defaults_to_true(self):
+        # "no failure has been reported" wins by default. Avoids
+        # silent mis-classification of a marker-only record as a
+        # failure.
+        rec = CheckRecord(scope="s", msg_id="i", msg="m")
+        self.assertIs(rec.passed, True)
+
+    def test_checkrecord_value_field_survives_emit(self):
+        # Sanity: building via check_value (which goes through
+        # _emit) populates value + expected.
+        check_value(0xDEAD, 0xBEEF, alert_level=AlertLevel.WARNING,
+                    msg="x")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.failed[0].value, 0xDEAD)
+        self.assertEqual(s.failed[0].expected, 0xBEEF)
+
+    def test_checkrecord_accepts_value_and_expected_in_constructor(self):
+        rec = CheckRecord(
+            scope="s", msg_id="i", msg="m",
+            value=42, expected=43,
+        )
+        self.assertEqual(rec.value, 42)
+        self.assertEqual(rec.expected, 43)
+
 
 if __name__ == "__main__":
     unittest.main()

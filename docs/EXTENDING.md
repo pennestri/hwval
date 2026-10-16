@@ -230,6 +230,21 @@ everything else lands in :attr:`CheckRecord.extras`. Extras that
 are not declared in the YML are silently dropped from the report
 (still on the record, just not rendered).
 
+## Edit the YML without writing it by hand
+
+A self-contained HTML/JS GUI for building `hwval.yml` lives at
+[`tools/seg_config_gui/`](../../tools/seg_config_gui/). Open it in
+any browser, click your way through the field list, copy or
+download the result. The form runs the same validation checks
+the Python loader does (Python-identifier field names, no
+duplicates, `"package.module:attr"` form for
+`test_id_function`), so a "✓ valid" chip means the file will
+load without error.
+
+Useful when a project wants a non-developer (test lead, lab
+engineer) to tweak the report layout without touching Python or
+YAML.
+
 ## Gotchas to remember
 
 - The `_summary_records` accumulator is **module-level**, not per-call.

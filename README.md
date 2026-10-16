@@ -168,10 +168,12 @@ class CheckRecord:
     scope: str
     msg_id: str
     msg: str
-    passed: bool
-    detail: str
-    test_id: str = ""  # populated by the user-supplied test_id_function
+    passed: bool = True          # default = "no failure reported"
+    detail: str = ""             # one-liner produced by _emit
+    test_id: str = ""            # populated by the user-supplied test_id_function
     extras: Mapping[str, Any] = field(default_factory=dict)  # **kwargs
+    value: Any = None            # the operand the check compared
+    expected: Any = None         # the literal target / "in [min, max]"
 
 @dataclass
 class TestSummary:
@@ -185,8 +187,11 @@ class FieldSpec:
     reports: tuple[str, ...] = ("test_performed", "test_results")
 ```
 
-`extras` is where `**kwargs` passed to `check_value` /
-`check_value_in_range` land (see [§12](#12-pass-extras-to-check_-for-yml-declared-fields)).
+`value` and `expected` are stored on the record when a `check_*`
+runs and become available in the rendered report (declare them in
+the YML like any other field). `extras` is where `**kwargs`
+passed to `check_value` / `check_value_in_range` land (see
+[§12](#12-pass-extras-to-check_-for-yml-declared-fields)).
 `FieldSpec` is the per-field record used by `SegDocument.fields`
 to control which report(s) each field appears in.
 
@@ -582,6 +587,41 @@ built-in. (If you really need a same-named extra, the record can
 still be built directly via `CheckRecord(extras=...)`, but the
 projection prefers `extras` over the built-in when both are set.)
 
+### 13. Build the YML with a GUI
+
+Two complementary GUIs are shipped under [`tools/`](tools/):
+
+* [`tools/seg_config_gui/`](tools/seg_config_gui/) — a
+  self-contained HTML/JS form. No dependencies, no server: open
+  the file in a browser and start clicking.
+* [`tools/seg_config_gui_flask/`](tools/seg_config_gui_flask/) —
+  a pure-Python Flask app. The YML is generated and validated on
+  the server (via the same `hwval.docs.load_seg_config` the
+  real `SegDocument` constructor uses), so a green "valid" badge
+  means the YML will load without error. Useful for central
+  deployment and for projects that want the validation to live
+  in one place.
+
+```bash
+# Static HTML GUI
+xdg-open tools/seg_config_gui/index.html
+
+# Flask GUI
+uv sync --extra docs
+uv run python tools/seg_config_gui_flask/app.py
+# …then open http://127.0.0.1:5000/
+```
+
+Both let you add, remove and reorder fields, scope each field
+to `test_performed`, `test_results`, or both, pick the
+`include_passed` / `include_failed` toggles, and set the
+`test_id_function` dotted path. Field names are validated as
+Python identifiers, duplicates are rejected, and the
+`test_id_function` is checked for the `"package.module:attr"`
+shape. The Flask GUI also exposes a *Download hwval.yml* button
+that posts the same form state to `/download` and saves the
+response as a file. See the per-tool READMEs.
+
 ---
 
 ## Severity reference
@@ -611,7 +651,7 @@ raise `NotImplementedError`. Port to cocotb if you need them.
 
 ```bash
 uv sync --extra docs   # one-time venv + dev deps + docs extra
-uv run pytest     # 98 tests
+uv run pytest     # 120 tests
 
 # Run the example scripts (one per feature)
 for d in examples/0?_*/; do uv run python "$d/example.py"; done

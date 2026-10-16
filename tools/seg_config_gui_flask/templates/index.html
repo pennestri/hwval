@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+
+{% block title %}
+  {% if result and not result.errors %}✓
+  {% else %}hwval SegDocument · YML Config Generator{% endif %}
+{% endblock %}
+
+{% block body %}
+
+{# Result banner — success badge (always shown once we have a result)
+   and the error list when something failed. #}
+{% if result %}
+  {% if result.errors %}
+    <div class="card errors">
+      <strong>Could not generate YML:</strong>
+      <ul>
+        {% for err in result.errors %}<li>{{ err }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% else %}
+    <div class="card">
+      <h2><span class="step">✓</span>YML is valid
+        <span class="status">ready to download</span>
+      </h2>
+    </div>
+  {% endif %}
+{% endif %}
+
+<form method="post" action="{{ url_for('index') }}" id="main-form">
+  <div class="card">
+    <h2><span class="step">1.</span>Fields</h2>
+    <p class="hint">
+      Each field becomes a column in the rendered <code>.docx</code>.
+      Plain string entries (no <code>reports</code>) appear in both
+      reports; entries with <code>reports</code> are scoped to a
+      single report. Drag the handle to reorder, or use the
+      <em>Insert preset</em> dropdown to add a built-in
+      <code>CheckRecord</code> field or a common user extra.
+      Field names must be valid Python identifiers.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Name</th>
+          <th>Reports</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="fields-tbody">
+        {% for f in fields %}
+          <tr draggable="true" data-i="{{ loop.index0 }}">
+            <td class="handle" title="Drag to reorder">⋮⋮</td>
+            <td>
+              <input type="text" name="field_name"
+                     value="{{ f.name }}" placeholder="field_name">
+            </td>
+            <td>
+              <select name="field_reports">
+                {% for value, label in report_options %}
+                  <option value="{{ value }}"
+                          {% if f.reports == value %}selected{% endif %}>
+                    {{ label }}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="actions-cell">
+              <button type="button" class="small danger" data-action="del">
+                Delete
+              </button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="add-row">
+      <button type="button" class="primary" id="add-field">
+        + Add Field
+      </button>
+      <span class="hint" style="margin: 0;">or insert preset:</span>
+      <select id="preset-select">
+        <option value="">— preset —</option>
+        {% for group, names in presets.items() %}
+          <optgroup label="{{ group }}">
+            {% for n in names %}
+              <option value="{{ n }}">{{ n }}</option>
+            {% endfor %}
+          </optgroup>
+        {% endfor %}
+      </select>
+      <button type="button" class="small" id="insert-preset">Insert</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">2.</span>Settings</h2>
+    <label class="checkbox">
+      <input type="checkbox" name="include_passed"
+             {% if settings.include_passed %}checked{% endif %}>
+      <code>include_passed</code> — render passing records
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" name="include_failed"
+             {% if settings.include_failed %}checked{% endif %}>
+      <code>include_failed</code> — render failing records
+    </label>
+    <label class="block">
+      <code>test_id_function</code> (optional)
+      <input type="text" name="test_id_function"
+             value="{{ settings.test_id_function }}"
+             placeholder="package.module:make_test_id">
+      <span class="hint" style="margin-top: 4px;">
+        <code>"package.module:attr"</code> reference, same convention as
+        <code>logging.config.dictConfig</code>. Resolved on
+        <code>SegDocument</code> construction; installed globally via
+        <code>set_test_id_function</code>.
+      </span>
+    </label>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">3.</span>Generate</h2>
+    <div class="actions">
+      <button type="submit" class="primary">Generate YML</button>
+      {# The download button is its own <form> so it can POST
+         independently. We submit the same field/settings state
+         by cloning the current form. JS hooks handle that. #}
+      <button type="button" id="download-btn"
+              {% if not result or result.errors %}disabled{% endif %}>
+        Download hwval.yml
+      </button>
+    </div>
+  </div>
+</form>
+
+{# The standalone download form: posts to /download and lets the
+   browser save the response. Filled in by JS when the user
+   clicks Download. #}
+<form method="post" action="{{ url_for('download') }}" id="download-form"
+      style="display: none;"></form>
+
+{% if result and not result.errors %}
+  <div class="card">
+    <h2><span class="step">4.</span>Generated YML</h2>
+    <pre class="code">{{ result.yaml }}</pre>
+    <details>
+      <summary>Show the equivalent Python kwargs</summary>
+      <pre class="code">{{ result.python }}</pre>
+    </details>
+  </div>
+{% endif %}
+
+<script>
+"use strict";
+
+// --- Field row management (add / remove / drag-reorder) -------------------
+// The form is a normal POST: when the user clicks "Generate YML",
+// the browser submits every input as form data. We just need a
+// tiny bit of JS to mutate the row list client-side before that
+// submit, and to keep the "Download" button in sync.
+
+const tbody = document.getElementById("fields-tbody");
+
+function nextFreshName() {
+  const existing = new Set(
+    Array.from(tbody.querySelectorAll('input[name="field_name"]'))
+      .map(i => i.value)
+  );
+  for (let n = 1; n < 10000; n++) {
+    const cand = "field_" + n;
+    if (!existing.has(cand)) return cand;
+  }
+  return "field_x";
+}
+
+function makeRow(name, reports) {
+  const tr = document.createElement("tr");
+  tr.draggable = true;
+  tr.innerHTML = `
+    <td class="handle" title="Drag to reorder">⋮⋮</td>
+    <td><input type="text" name="field_name" placeholder="field_name"></td>
+    <td>
+      <select name="field_reports">
+        <option value="all">both reports</option>
+        <option value="test_performed">test_performed only</option>
+        <option value="test_results">test_results only</option>
+      </select>
+    </td>
+    <td class="actions-cell">
+      <button type="button" class="small danger" data-action="del">Delete</button>
+    </td>
+  `;
+  tr.querySelector('input[name="field_name"]').value = name;
+  const sel = tr.querySelector('select[name="field_reports"]');
+  const opt = Array.from(sel.options).find(o => o.value === reports);
+  if (opt) opt.selected = true;
+  attachRowEvents(tr);
+  return tr;
+}
+
+function attachRowEvents(tr) {
+  tr.querySelector('[data-action="del"]').addEventListener("click", () => {
+    tr.remove();
+  });
+  tr.addEventListener("dragstart", e => {
+    e.dataTransfer.setData("text/plain", "");
+    tr.classList.add("dragging");
+  });
+  tr.addEventListener("dragend", () => {
+    tr.classList.remove("dragging");
+    tbody.querySelectorAll("tr.drag-over")
+      .forEach(el => el.classList.remove("drag-over"));
+  });
+  tr.addEventListener("dragover", e => {
+    e.preventDefault();
+    tr.classList.add("drag-over");
+  });
+  tr.addEventListener("dragleave", () => {
+    tr.classList.remove("drag-over");
+  });
+  tr.addEventListener("drop", e => {
+    e.preventDefault();
+    tr.classList.remove("drag-over");
+    const dragging = tbody.querySelector("tr.dragging");
+    if (dragging && dragging !== tr) {
+      tbody.insertBefore(dragging, tr);
+    }
+  });
+}
+
+tbody.querySelectorAll("tr").forEach(attachRowEvents);
+
+document.getElementById("add-field").addEventListener("click", () => {
+  tbody.appendChild(makeRow(nextFreshName(), "all"));
+});
+
+document.getElementById("insert-preset").addEventListener("click", () => {
+  const sel = document.getElementById("preset-select");
+  const name = sel.value;
+  if (!name) return;
+  const existing = Array.from(
+    tbody.querySelectorAll('input[name="field_name"]')
+  ).map(i => i.value);
+  if (existing.includes(name)) {
+    alert("Already in list: " + name);
+    return;
+  }
+  tbody.appendChild(makeRow(name, "all"));
+  sel.value = "";
+});
+
+// --- Download: clone the main form's fields into the download form ------
+// The download endpoint lives at /download (different from /) so the
+// browser gets a Content-Disposition response. We rebuild a hidden
+// form with the same field_name / field_reports / settings inputs
+// and submit it.
+
+function cloneIntoDownloadForm() {
+  const main = document.getElementById("main-form");
+  const dl = document.getElementById("download-form");
+  dl.innerHTML = "";
+  Array.from(main.elements).forEach(el => {
+    if (!el.name) return;
+    if (el.type === "checkbox") {
+      if (!el.checked) return;
+      const i = document.createElement("input");
+      i.type = "hidden"; i.name = el.name; i.value = "on";
+      dl.appendChild(i);
+    } else if (el.type === "submit" || el.type === "button") {
+      // skip
+    } else {
+      const i = document.createElement("input");
+      i.type = "hidden"; i.name = el.name; i.value = el.value;
+      dl.appendChild(i);
+    }
+  });
+  return dl;
+}
+
+const dlBtn = document.getElementById("download-btn");
+if (dlBtn) {
+  dlBtn.addEventListener("click", () => {
+    cloneIntoDownloadForm().submit();
+  });
+}
+</script>
+
+{% endblock %}

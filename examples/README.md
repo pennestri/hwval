@@ -13,7 +13,7 @@ virtualenv where `hwval` is installed).
 | 05  | [05_logging](./05_logging)                          | Capture log records; replace the module logger via `set_logger`     |
 | 06  | [06_report_test_summary](./06_report_test_summary)  | `report_test_summary`, `reset_test_summary`, `TestSummary`          |
 | 07  | [07_seg_document](./07_seg_document)                | `SegDocument._generate` — two `.docx` reports from Jinja2 templates |
-| 08  | [08_test_id_and_yaml](./08_test_id_and_yaml)        | `test_id` field + user-supplied update fn + YML config for `SegDocument` |
+| 08  | [08_test_id_and_yaml](./08_test_id_and_yaml)        | `test_id` + per-report fields + YML + `**extras` (all check_*)     |
 
 ## Run them all
 
@@ -34,6 +34,12 @@ optional `docs` extra (`docxtpl` + `python-docx` + `jinja2` +
 uv add hwval[docs]
 ```
 
+## Companion tools
+
+* [`../tools/seg_config_gui/`](../tools/seg_config_gui/) — a
+  self-contained HTML/JS form for building a `hwval.yml` without
+  hand-editing YAML. Open the file in a browser.
+
 ## Learning path
 
 1. **Start with 01–04** to understand the building blocks.
@@ -42,4 +48,6 @@ uv add hwval[docs]
    `SegDocument`.
 4. **Finish with 07** for the end-to-end docx report workflow.
 5. **Wrap up with 08** to see `test_id` plus the YAML-driven report
-   config.
+   config (per-report field split + `**extras`).
+6. **Open [`tools/seg_config_gui/`](../tools/seg_config_gui/) in a
+   browser** to build the YML by clicking instead of typing.
