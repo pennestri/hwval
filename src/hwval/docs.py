@@ -27,33 +27,27 @@ from .checks import (
 
 
 # --------------------------------------------------------------------------- #
-# Public dataclasses                                                           #
+# Constants                                                                    #
 # --------------------------------------------------------------------------- #
 
 
-@dataclass
-class _TemplateContext:
-    """Internal: what's handed to each Jinja2 template during rendering."""
-
-    summary: TestSummary
-    passed: list[dict] = field(default_factory=list)
-    failed: list[dict] = field(default_factory=list)
-    records: list[dict] = field(default_factory=list)
-    fields: list[str] = field(default_factory=list)
-    include_passed: bool = True
-    include_failed: bool = True
-    generated_at: str = ""
+# Names of the two rendered reports. ``SegDocument`` uses these to
+# filter per-field ``reports`` specs and to choose the right template.
+REPORT_TEST_PERFORMED = "test_performed"
+REPORT_TEST_RESULTS = "test_results"
+ALL_REPORTS: tuple[str, ...] = (REPORT_TEST_PERFORMED, REPORT_TEST_RESULTS)
+_VALID_REPORT_NAMES: frozenset[str] = frozenset(
+    {REPORT_TEST_PERFORMED, REPORT_TEST_RESULTS, "all"}
+)
 
 
-# --------------------------------------------------------------------------- #
-# Helpers                                                                      #
-# --------------------------------------------------------------------------- #
-
-
-# Default set of CheckRecord fields exposed to Jinja templates.
-# ``test_id`` is the user-supplied id of the test (filled in by
+# Default set of CheckRecord field names exposed to Jinja templates
+# when the user does not configure anything. ``test_id`` is the
+# user-supplied id of the test (filled in by
 # :func:`hwval.set_test_id_function`); it is included by default so
-# the rendered report carries the id without extra wiring.
+# the rendered report carries the id without extra wiring. Each
+# default field is in BOTH reports (no per-report split until the
+# YML asks for one).
 DEFAULT_FIELDS: tuple[str, ...] = (
     "test_id",
     "msg",
@@ -71,16 +65,132 @@ SEG_CONFIG_KEYS: frozenset[str] = frozenset(
 )
 
 
+# --------------------------------------------------------------------------- #
+# FieldSpec                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class FieldSpec:
+    """A single named field and the reports it should appear in.
+
+    The YML loader, the ``SegDocument(..., fields=...)`` constructor
+    and the internal projection logic all funnel through
+    :class:`FieldSpec` so the per-report split is a single concept
+    rather than two parallel data structures.
+
+    Parameters
+    ----------
+    name:
+        The field name. May match a built-in :class:`CheckRecord`
+        attribute (``test_id``, ``msg``, ``scope``, ``msg_id``,
+        ``passed``, ``detail``) or a key of
+        :attr:`CheckRecord.extras` populated from ``**kwargs`` on
+        :func:`check_value` / :func:`check_value_in_range`.
+    reports:
+        Tuple of report names this field should appear in. A field
+        in *all* reports is the default (``("test_performed",
+        "test_results")``); restrict to a subset to keep a column
+        out of one of the two rendered documents.
+    """
+
+    name: str
+    reports: tuple[str, ...] = ALL_REPORTS
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError(
+                f"FieldSpec.name must be a non-empty str, got {self.name!r}"
+            )
+        if not isinstance(self.reports, (tuple, list)):
+            raise TypeError(
+                f"FieldSpec.reports must be a tuple/list, got "
+                f"{type(self.reports).__name__}"
+            )
+        bad = [r for r in self.reports if r not in _VALID_REPORT_NAMES]
+        if bad:
+            raise ValueError(
+                f"FieldSpec({self.name!r}).reports contains invalid "
+                f"name(s) {bad!r}; valid: {sorted(_VALID_REPORT_NAMES)}"
+            )
+        # "all" is sugar for the explicit pair; expand it once so the
+        # downstream filter is always a "subset of" test.
+        if "all" in self.reports:
+            object.__setattr__(self, "reports", ALL_REPORTS)
+
+    def in_report(self, report: str) -> bool:
+        """True iff this field should be rendered in ``report``."""
+        return report in self.reports
+
+    @classmethod
+    def coerce(cls, value: Any) -> "FieldSpec":
+        """Normalize a YML/kwarg entry into a :class:`FieldSpec`.
+
+        Accepts:
+
+        * a :class:`str` (field name; ``reports`` defaults to all
+          reports);
+        * a :class:`dict` with keys ``name`` and optional ``reports``;
+        * an existing :class:`FieldSpec` (returned as-is).
+
+        Raises :class:`TypeError` on anything else and
+        :class:`ValueError` for malformed dicts.
+        """
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            return cls(name=value)
+        if isinstance(value, dict):
+            if "name" not in value:
+                raise ValueError(
+                    f"field spec dict must have a 'name' key, got {value!r}"
+                )
+            name = value["name"]
+            reports_raw = value.get("reports", ALL_REPORTS)
+            if isinstance(reports_raw, str):
+                reports = (reports_raw,)
+            elif isinstance(reports_raw, (list, tuple)):
+                reports = tuple(reports_raw)
+            else:
+                raise TypeError(
+                    f"`reports` for field {name!r} must be a string "
+                    f"or a list/tuple, got {type(reports_raw).__name__}"
+                )
+            return cls(name=name, reports=reports)
+        raise TypeError(
+            f"cannot coerce {type(value).__name__} to FieldSpec: {value!r}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Record projection                                                            #
+# --------------------------------------------------------------------------- #
+
+
 def _record_to_dict(record: CheckRecord, fields: Sequence[str]) -> dict:
-    """Project a CheckRecord onto the requested subset of fields."""
+    """Project a :class:`CheckRecord` onto the requested field names.
+
+    For each requested name, the value is taken from (in order):
+
+    1. :attr:`CheckRecord.extras` if the user supplied it via
+       ``**kwargs`` on :func:`check_value` / :func:`check_value_in_range`.
+    2. The matching built-in :class:`CheckRecord` attribute (``test_id``,
+       ``scope``, ``msg``, ``msg_id``, ``passed``, ``detail``).
+    3. The empty string as a default — the field is still emitted so
+       templates that loop over ``rec.<field>`` see a stable shape
+       row-by-row.
+
+    This is what makes a YML-declared field behave as "an empty string
+    if not specified" in the rendered report.
+    """
     out: dict[str, Any] = {}
     for name in fields:
-        if not hasattr(record, name):
-            raise AttributeError(
-                f"CheckRecord has no field {name!r}; "
-                f"valid fields are: {sorted(f.__name__ for f in record.__dataclass_fields__.values())}"
-            )
-        out[name] = getattr(record, name)
+        if name in record.extras:
+            out[name] = record.extras[name]
+        elif hasattr(record, name):
+            out[name] = getattr(record, name)
+        else:
+            out[name] = ""
     return out
 
 
@@ -172,17 +282,32 @@ def load_seg_config(path: Union[str, Path]) -> dict[str, Any]:
     The file is expected to map onto the same keys the
     :class:`SegDocument` constructor accepts:
 
-    * ``fields`` (list[str]) — names of :class:`CheckRecord` fields to
-      expose to the templates.
+    * ``fields`` (list) — names of fields to expose to the templates.
+      Each entry may be either a plain string (the field name; the
+      field appears in **both** rendered reports) or a mapping with
+      ``name`` and ``reports`` keys. ``reports`` is a string or list
+      and accepts ``"test_performed"``, ``"test_results"`` or
+      ``"all"`` (the default). See :class:`FieldSpec` for the
+      normalised form.
     * ``include_passed`` (bool) — default ``True``.
     * ``include_failed`` (bool) — default ``True``.
-    * ``test_id_function`` (str) — a ``"package.module:attr"`` reference
-      to a function with signature ``(record, sequence) -> str``. It is
-      installed globally via :func:`hwval.set_test_id_function` so the
-      same id ends up in logs and reports.
+    * ``test_id_function`` (str) — a ``"package.module:attr"``
+      reference to a function with signature
+      ``(record, sequence) -> str``. It is installed globally via
+      :func:`hwval.set_test_id_function` so the same id ends up in
+      logs and reports.
 
-    Any unknown key raises :class:`ValueError` so typos surface early
-    instead of being silently ignored.
+    Field names must be valid Python identifiers because they
+    become Jinja attribute names inside the templates. A name that
+    matches a built-in :class:`CheckRecord` attribute is read from
+    there; any other name is read from :attr:`CheckRecord.extras`
+    (the ``**kwargs`` you passed to
+    :func:`hwval.check_value` / :func:`hwval.check_value_in_range`).
+    If a YML-declared field has no value for a given record it
+    defaults to the empty string in the rendered report.
+
+    Any unknown top-level key raises :class:`ValueError` so typos
+    surface early instead of being silently ignored.
 
     Requires PyYAML; raise a clear :class:`ImportError` if it isn't
     installed. PyYAML is *not* a hard dependency of ``hwval`` because
@@ -198,7 +323,8 @@ def load_seg_config(path: Union[str, Path]) -> dict[str, Any]:
     Returns
     -------
     dict
-        A validated config dict ready to merge into SegDocument kwargs.
+        A validated config dict. The ``fields`` key holds a list of
+        :class:`FieldSpec` objects; other keys hold plain values.
     """
     try:
         import yaml  # type: ignore[import-not-found]
@@ -232,13 +358,35 @@ def load_seg_config(path: Union[str, Path]) -> dict[str, Any]:
 
     if "fields" in cfg:
         flds = cfg["fields"]
-        if not isinstance(flds, list) or not all(
-            isinstance(x, str) for x in flds
-        ):
+        if not isinstance(flds, list):
             raise TypeError(
-                f"`fields` in {p} must be a list[str], got "
+                f"`fields` in {p} must be a list, got "
                 f"{type(flds).__name__}"
             )
+        coerced: list[FieldSpec] = []
+        for i, entry in enumerate(flds):
+            try:
+                spec = FieldSpec.coerce(entry)
+            except (TypeError, ValueError) as e:
+                raise type(e)(
+                    f"fields[{i}] in {p}: {e}"
+                ) from e
+            if not spec.name.isidentifier():
+                raise ValueError(
+                    f"fields[{i}] in {p}: name {spec.name!r} is not a "
+                    f"valid Python identifier (Jinja attribute names "
+                    f"must be identifiers)"
+                )
+            coerced.append(spec)
+        # Reject duplicates to keep the projection stable.
+        seen = set()
+        for spec in coerced:
+            if spec.name in seen:
+                raise ValueError(
+                    f"fields in {p}: duplicate name {spec.name!r}"
+                )
+            seen.add(spec.name)
+        cfg["fields"] = coerced
     for key in ("include_passed", "include_failed"):
         if key in cfg and not isinstance(cfg[key], bool):
             raise TypeError(
@@ -292,8 +440,12 @@ class SegDocument:
     1. **Test performed** — describes the tests that ran.
     2. **Test results** — the actual outcomes (passed / failed).
 
-    Both templates receive the same Jinja context, so the only difference
-    between the two outputs is what the user puts in each template.
+    The two rendered reports are driven by a single list of
+    :class:`FieldSpec` objects. Each field carries a ``reports``
+    attribute; a field in **both** reports is the default, and the
+    user can scope a field to one report (or the other) via the
+    YML/``fields=`` syntax below. Filtering, include toggles and
+    extra context still apply globally.
 
     The templates are ordinary Word documents containing Jinja2 placeholders
     (use `docxtpl` syntax: ``{{ var }}`` for variables, ``{%p ... %}`` for
@@ -307,10 +459,14 @@ class SegDocument:
     results_template:
         Path to the ``test results`` ``.docx`` template.
     fields:
-        Subset of :class:`CheckRecord` field names to expose to the
-        templates. Default: ``("test_id", "msg", "scope", "msg_id",
-        "passed", "detail")``. Anything not listed is not visible
-        inside the template.
+        Subset of fields to expose to the templates. Each entry is
+        either a string (the field name; field appears in *both*
+        reports) or a :class:`FieldSpec` (or any object
+        :meth:`FieldSpec.coerce` accepts, e.g. ``{"name": "msg",
+        "reports": "test_results"}``). Default: every field in
+        :data:`DEFAULT_FIELDS` appears in both reports. Field names
+        must be valid Python identifiers so they work as Jinja
+        attribute names.
     include_passed:
         When ``False``, passing records are excluded from both rendered
         documents.
@@ -355,8 +511,9 @@ class SegDocument:
     FileNotFoundError
         If ``config`` is supplied and the file does not exist.
     ValueError
-        If the YAML config contains unknown keys, or
-        ``test_id_function`` does not parse to a callable.
+        If the YAML config contains unknown keys, a field name is
+        not a valid Python identifier, or ``test_id_function`` does
+        not parse to a callable.
 
     Examples
     --------
@@ -371,6 +528,20 @@ class SegDocument:
     ...     test_output="out/test_performed.docx",
     ...     results_output="out/test_results.docx",
     ... )
+
+    The per-report field split lives in the YML or in a list of
+    :class:`FieldSpec` objects. For example, to only show the
+    ``msg`` field in the *test results* report::
+
+        SegDocument(
+            test_template=...,
+            results_template=...,
+            fields=[
+                {"name": "test_id"},
+                {"name": "msg", "reports": "test_results"},
+                {"name": "operator"},
+            ],
+        )
     """
 
     def __init__(
@@ -378,7 +549,7 @@ class SegDocument:
         test_template: Union[str, Path],
         results_template: Union[str, Path],
         *,
-        fields: Optional[Sequence[str]] = None,
+        fields: Optional[Sequence[Any]] = None,
         include_passed: bool = True,
         include_failed: bool = True,
         filter: Optional[Callable[[CheckRecord], bool]] = None,
@@ -403,7 +574,7 @@ class SegDocument:
         if config is not None:
             cfg = load_seg_config(config)
             if fields is None and "fields" in cfg:
-                fields = list(cfg["fields"])
+                fields = cfg["fields"]  # already list[FieldSpec]
             if "include_passed" in cfg:
                 include_passed = cfg["include_passed"]
             if "include_failed" in cfg:
@@ -411,7 +582,40 @@ class SegDocument:
             if test_id_function is None and "test_id_function" in cfg:
                 test_id_function = cfg["test_id_function"]
 
-        # ----- 2. Resolve test_id_function and install globally -----
+        # ----- 2. Coerce ``fields`` to a list of FieldSpec -----
+        # The internal model is "list of FieldSpec"; the public
+        # surface accepts strings/dicts/specs interchangeably via
+        # FieldSpec.coerce so the YML, kwargs and direct construction
+        # all share the same path.
+        if fields is not None:
+            specs: list[FieldSpec] = []
+            for i, entry in enumerate(fields):
+                try:
+                    spec = FieldSpec.coerce(entry)
+                except (TypeError, ValueError) as e:
+                    raise type(e)(
+                        f"fields[{i}] in SegDocument(..., fields=...): {e}"
+                    ) from e
+                if not spec.name.isidentifier():
+                    raise ValueError(
+                        f"fields[{i}] in SegDocument(..., fields=...): "
+                        f"name {spec.name!r} is not a valid Python "
+                        f"identifier (Jinja attribute names must be "
+                        f"identifiers)"
+                    )
+                specs.append(spec)
+            seen = set()
+            for spec in specs:
+                if spec.name in seen:
+                    raise ValueError(
+                        f"SegDocument(..., fields=...): duplicate "
+                        f"field name {spec.name!r}"
+                    )
+                seen.add(spec.name)
+        else:
+            specs = [FieldSpec(name=n) for n in DEFAULT_FIELDS]
+
+        # ----- 3. Resolve test_id_function and install globally -----
         # A user-supplied function is global (set in checks.py module
         # state) so the same id ends up in the report, the log lines
         # emitted by check_value, and report_test_summary output.
@@ -422,9 +626,7 @@ class SegDocument:
         self.test_template = Path(test_template)
         self.results_template = Path(results_template)
 
-        self.fields: list[str] = (
-            list(fields) if fields is not None else list(DEFAULT_FIELDS)
-        )
+        self.fields: list[FieldSpec] = specs
         self.include_passed = include_passed
         self.include_failed = include_failed
         self.filter = filter
@@ -439,18 +641,26 @@ class SegDocument:
     # Internal                                                            #
     # ------------------------------------------------------------------ #
 
+    def _fields_for_report(self, report: str) -> list[FieldSpec]:
+        """Return the subset of :attr:`fields` declared for ``report``."""
+        return [f for f in self.fields if f.in_report(report)]
+
     def _build_context(
         self,
         summary: TestSummary,
-        fields: Sequence[str],
+        field_specs: Sequence[FieldSpec],
     ) -> dict[str, Any]:
-        """Compose the Jinja context for both templates.
+        """Compose the Jinja context for one of the two templates.
 
         ``summary`` in the Jinja context reflects the *filtered* set of
         records (i.e. what is actually written to the rendered docx).
         ``records``, ``passed`` and ``failed`` are the same filtered sets
-        as plain dicts projected onto ``fields``.
+        as plain dicts projected onto the names of ``field_specs``.
+        Fields not present on a record (no built-in attribute, no
+        ``extras`` entry) default to the empty string so templates can
+        loop over the keys without a special case.
         """
+        field_names = [f.name for f in field_specs]
         passed_records = _select(
             summary.passed,
             include=self.include_passed,
@@ -461,8 +671,8 @@ class SegDocument:
             include=self.include_failed,
             filter_fn=self.filter,
         )
-        passed_dicts = [_record_to_dict(r, fields) for r in passed_records]
-        failed_dicts = [_record_to_dict(r, fields) for r in failed_records]
+        passed_dicts = [_record_to_dict(r, field_names) for r in passed_records]
+        failed_dicts = [_record_to_dict(r, field_names) for r in failed_records]
 
         filtered_summary = TestSummary(passed=passed_dicts, failed=failed_dicts)
 
@@ -471,7 +681,7 @@ class SegDocument:
             "passed": passed_dicts,
             "failed": failed_dicts,
             "records": passed_dicts + failed_dicts,
-            "fields": list(fields),
+            "fields": field_names,
             "include_passed": self.include_passed,
             "include_failed": self.include_failed,
             "generated_at": datetime.now(timezone.utc).isoformat(
@@ -513,6 +723,12 @@ class SegDocument:
     ) -> Tuple[Path, Path]:
         """Render both templates and write the two docx outputs.
 
+        Each template receives a per-report :class:`FieldSpec`-filtered
+        context, so a field declared with ``reports: test_results``
+        only appears in the *test results* report and vice versa.
+        The ``fields`` placeholder inside the templates therefore
+        lists exactly the columns the report will render.
+
         Parameters
         ----------
         test_output:
@@ -538,18 +754,20 @@ class SegDocument:
             A :class:`TestSummary` reflecting the *filtered* records
             (what is actually written to the rendered docx). Its
             ``passed`` / ``failed`` lists hold plain dicts projected
-            onto the configured ``fields``. Counts (``total``,
-            ``passed_count``, ``failed_count``, ``ok``) therefore match
-            the rendered document.
+            onto the field names declared for *this* report. Counts
+            (``total``, ``passed_count``, ``failed_count``, ``ok``)
+            therefore match the rendered document.
         ``passed``  : list of dict
-            Passing records projected onto the configured ``fields``.
+            Passing records projected onto the field names declared
+            for this report.
         ``failed``  : list of dict
-            Failing records projected onto the configured ``fields``.
+            Failing records projected onto the field names declared
+            for this report.
         ``records`` : list of dict
             ``passed + failed``.
         ``fields``  : list of str
-            The field names used to project records (echo for templates
-            that want to render the column header row).
+            The field names for this report (echo for templates that
+            want to render the column header row).
         ``include_passed`` / ``include_failed`` : bool
             Echo of the toggles, so templates can branch on them.
         ``generated_at`` : str
@@ -560,12 +778,17 @@ class SegDocument:
         if summary is None:
             summary = current_summary()
 
-        context = self._build_context(summary, self.fields)
+        ctx_performed = self._build_context(
+            summary, self._fields_for_report(REPORT_TEST_PERFORMED)
+        )
+        ctx_results = self._build_context(
+            summary, self._fields_for_report(REPORT_TEST_RESULTS)
+        )
 
         test_path = self._render_one(
-            self.test_template, Path(test_output), context
+            self.test_template, Path(test_output), ctx_performed
         )
         results_path = self._render_one(
-            self.results_template, Path(results_output), context
+            self.results_template, Path(results_output), ctx_results
         )
         return test_path, results_path

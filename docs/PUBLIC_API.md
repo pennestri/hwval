@@ -164,10 +164,32 @@ class CheckRecord:
     passed: bool
     detail: str
     test_id: str = ""
+    extras: Mapping[str, Any] = field(default_factory=dict)
 ```
 
 `test_id` is filled in by the active test_id function (see
-`set_test_id_function` above).
+`set_test_id_function` above). `extras` carries any user-supplied
+YML-declared fields passed as ``**kwargs`` to
+:func:`hwval.check_value` / :func:`hwval.check_value_in_range`; the
+YML decides whether each extra is rendered (and in which report).
+
+### `class FieldSpec`
+
+Per-field record used by `SegDocument.fields` to control which
+report(s) each field appears in:
+
+```python
+@dataclass(frozen=True)
+class FieldSpec:
+    name: str
+    reports: tuple[str, ...] = ("test_performed", "test_results")
+```
+
+`reports` may include `"test_performed"`, `"test_results"`, or
+`"all"` (an alias for both). A field is rendered only in reports
+listed in its `reports` tuple. :meth:`FieldSpec.coerce` normalises
+plain strings, dicts, and existing `FieldSpec` objects into a
+canonical `FieldSpec`.
 
 ### `class TestSummary`
 
@@ -195,13 +217,13 @@ plain dicts projected onto the user-configured `fields`; counts and
 ```python
 class SegDocument(
     test_template, results_template, *,
-    fields=("test_id", "msg", "scope", "msg_id", "passed", "detail"),
+    fields=None,               # str | FieldSpec | mapping per field
     include_passed=True,
     include_failed=True,
     filter=None,
     extra_context=None,
-    test_id_function=None,    # callable or "package.module:attr" string
-    config=None,              # path to a YAML config file
+    test_id_function=None,     # callable or "package.module:attr" string
+    config=None,               # path to a YAML config file
 ):
     def _generate(
         test_output, results_output, *,
@@ -213,12 +235,33 @@ Binds two `.docx` templates plus reporting options. Templates are
 ordinary Word documents containing Jinja placeholders, processed via
 [`docxtpl`](https://docxtpl.readthedocs.io/).
 
+`fields` is a sequence of `FieldSpec` (or anything
+`FieldSpec.coerce` accepts). Each entry is a string (the field name
+appears in **both** reports) or a `FieldSpec` / dict that scopes the
+field to a subset of reports:
+
+```python
+SegDocument(
+    test_template=...,
+    results_template=...,
+    fields=[
+        "test_id",                                    # both reports
+        {"name": "msg_id", "reports": "test_performed"},
+        {"name": "msg",    "reports": "test_results"},
+        {"name": "detail", "reports": "test_results"},
+    ],
+)
+```
+
 When `test_id_function` is supplied it is installed globally via
 `set_test_id_function` so the same id ends up in logs and reports.
 When `config=` points at a YAML file the listed keys
 (`fields`, `include_passed`, `include_failed`, `test_id_function`)
 fill in any kwargs the caller left at their default; explicit
-kwargs always win over the YAML.
+kwargs always win over the YAML. Each template receives a
+per-report filtered Jinja context — the `fields` placeholder
+inside a template therefore lists exactly the columns the
+corresponding report will render.
 
 Jinja context available to both templates:
 
@@ -249,16 +292,23 @@ Load a `SegDocument` configuration from a YAML file. Validated keys:
 
 | Key                | Type        | Default | Notes                                                |
 | ------------------ | ----------- | ------- | ---------------------------------------------------- |
-| `fields`           | list[str]   | (defaults) | `CheckRecord` field names exposed to templates    |
+| `fields`           | list        | (defaults) | Field names / specs exposed to templates. Each entry is a plain string (field in both reports) or a mapping with `name` + `reports` keys. |
 | `include_passed`   | bool        | `True`  | Include passing records in the report                |
 | `include_failed`   | bool        | `True`  | Include failing records in the report                |
 | `test_id_function` | str         | —       | `"package.module:attr"` reference to a `(record, seq) -> str` function |
 
-Unknown keys raise `ValueError`. Wrong-typed values raise
-`TypeError`. Requires PyYAML; raises `ImportError` otherwise. The
-YAML only fills in keys the caller did not already pass to
-`SegDocument` explicitly, so the constructor signature is the
-source of truth and the YAML is a convenience layer.
+`fields[*].reports` is a string or list of strings chosen from
+`"test_performed"`, `"test_results"`, or `"all"`. The returned
+dict holds a normalised `fields` value: a list of `FieldSpec`
+objects. Field names must be valid Python identifiers (they become
+Jinja attribute names in the templates).
+
+Unknown top-level keys raise `ValueError`. Wrong-typed values
+raise `TypeError`. Duplicate field names raise `ValueError`.
+Requires PyYAML; raises `ImportError` otherwise. The YAML only
+fills in keys the caller did not already pass to `SegDocument`
+explicitly, so the constructor signature is the source of truth
+and the YAML is a convenience layer.
 
 ## Stubs (raise `NotImplementedError`)
 

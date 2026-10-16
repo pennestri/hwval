@@ -1,16 +1,22 @@
 # SegDocument config for example 08.
 #
-# Any key here is filled into the SegDocument constructor unless the
-# caller passes an explicit kwarg (in which case the kwarg wins).
-# Unknown keys are a hard error so typos surface immediately.
+# Each field can be a plain string (in *both* reports) or a mapping
+# with `name` and `reports` keys. `reports` accepts a single string
+# ("test_performed", "test_results", "all") or a list of those.
+#
+# `test_id` and `operator` end up in both reports; `msg_id` is only
+# in test_performed (the test plan view); `msg` and `detail` are
+# only in test_results (the per-failure dump).
 
 fields:
-  - test_id
-  - msg
-  - scope
-  - msg_id
-  - passed
-  - detail
+  - test_id                                    # both reports
+  - name: msg_id
+    reports: test_performed
+  - name: msg
+    reports: test_results
+  - name: detail
+    reports: test_results
+  - operator                                   # both reports
 
 include_passed: true
 include_failed: true

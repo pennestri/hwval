@@ -176,6 +176,60 @@ doc = SegDocument(
 `SegDocument(..., config=...)` is the only piece that needs the
 optional `[docs]` extra (it pulls in PyYAML alongside docxtpl).
 
+## Scope a field to one report; default missing fields to `""`
+
+Each YML / `fields=` entry can be a plain string (the field
+appears in *both* rendered reports) or a mapping that scopes it
+to a subset:
+
+```yaml
+fields:
+  - test_id                                    # both reports
+  - name: msg_id
+    reports: test_performed                    # only test_performed
+  - name: msg
+    reports: test_results                      # only test_results
+  - operator                                   # both reports
+```
+
+The same shape works directly in Python via
+:class:`hwval.docs.FieldSpec`:
+
+```python
+from hwval.docs import SegDocument
+
+doc = SegDocument(
+    test_template=...,
+    results_template=...,
+    fields=[
+        "test_id",
+        {"name": "msg_id", "reports": "test_performed"},
+        {"name": "msg",    "reports": "test_results"},
+    ],
+)
+```
+
+A field declared in the YML/``fields=`` but not supplied to a
+particular :func:`hwval.check_value` / :func:`hwval.check_value_in_range`
+call shows up as the empty string in that row. To populate it,
+pass the field name as a keyword argument to `check_value`:
+
+```python
+check_value(
+    0xDEAD, 0xDEAD,
+    alert_level=AlertLevel.WARNING,
+    msg="REG0 OK", scope="reg_walk", msg_id="ID_REG0",
+    operator="alice",         # → extras["operator"]
+    retries=3,                # → extras["retries"]
+)
+```
+
+`scope`, `msg`, `msg_id`, `radix`, `match_strictness`,
+`alert_level` are reserved (named parameters of `check_value`);
+everything else lands in :attr:`CheckRecord.extras`. Extras that
+are not declared in the YML are silently dropped from the report
+(still on the record, just not rendered).
+
 ## Gotchas to remember
 
 - The `_summary_records` accumulator is **module-level**, not per-call.

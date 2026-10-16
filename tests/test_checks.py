@@ -354,6 +354,73 @@ class UvvmCheckTests(unittest.TestCase):
         )
         self.assertEqual(rec.test_id, "TID_42")
 
+    # ---- extras (YML-declared user fields) ---------------------------- #
+
+    def test_extras_kwargs_land_on_record(self):
+        check_value(
+            1, 1, alert_level=AlertLevel.WARNING, msg="x",
+            operator="alice", notes="re-checked",
+        )
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(
+            s.passed[0].extras,
+            {"operator": "alice", "notes": "re-checked"},
+        )
+
+    def test_extras_kwargs_work_with_check_value_in_range(self):
+        check_value_in_range(
+            50, 10, 100, alert_level=AlertLevel.WARNING, msg="y",
+            operator="bob",
+        )
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].extras, {"operator": "bob"})
+
+    def test_extras_default_to_empty_dict(self):
+        # No kwargs at all → no extras.
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="z")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].extras, {})
+
+    def test_extras_preserved_across_dataclass_copy(self):
+        # _emit uses dataclasses.replace to set test_id; the extras
+        # dict must survive that copy.
+        check_value(
+            1, 1, alert_level=AlertLevel.WARNING, msg="x",
+            operator="alice",
+        )
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].extras, {"operator": "alice"})
+
+    def test_extras_isolation_between_records(self):
+        # Mutating one record's extras must never leak into another.
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a", tag="A")
+        check_value(2, 2, alert_level=AlertLevel.WARNING, msg="b", tag="B")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].extras, {"tag": "A"})
+        self.assertEqual(s.passed[1].extras, {"tag": "B"})
+
+    def test_extras_accepts_non_string_values(self):
+        # The library stores whatever the user passes; the report
+        # formatter decides how to render it.
+        check_value(
+            1, 1, alert_level=AlertLevel.WARNING, msg="x",
+            address=0xDEAD, retries=3,
+        )
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(
+            s.passed[0].extras,
+            {"address": 0xDEAD, "retries": 3},
+        )
+
+    def test_checkrecord_extras_default_is_empty_dict(self):
+        # Backward-compat: CheckRecord can still be built without
+        # passing extras.
+        rec = CheckRecord(
+            scope="s", msg_id="i", msg="m",
+            passed=True, detail="d",
+        )
+        self.assertEqual(rec.extras, {})
+
 
 if __name__ == "__main__":
     unittest.main()

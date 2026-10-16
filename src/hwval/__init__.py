@@ -39,10 +39,10 @@ __all__ = [
     "set_test_id_function",
 ]
 
-# `SegDocument` lives in the optional `hwval.docs` submodule; importing
-# it eagerly would force a docxtpl dependency on every user, so the name
-# is exposed lazily.
+# `SegDocument` and `FieldSpec` live in the optional `hwval.docs`
+# submodule; importing them eagerly would force a docxtpl dependency
+# on every user, so the names are exposed lazily.
 try:
-    from .docs import SegDocument  # noqa: F401
+    from .docs import FieldSpec, SegDocument  # noqa: F401
 except ImportError:  # pragma: no cover - optional extra missing
     pass

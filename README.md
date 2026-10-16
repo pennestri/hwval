@@ -98,7 +98,7 @@ actual rendering is done by `SegDocument._generate(...)`.
 | ------------------- | ----------------------------------- | ------------- | ------------------------------------------------------------- |
 | `test_template`     | `str` / `Path`                      | —             | Path to the *test performed* `.docx` template                 |
 | `results_template`  | `str` / `Path`                      | —             | Path to the *test results* `.docx` template                   |
-| `fields`            | `Sequence[str]`                     | `("test_id", "msg", "scope", "msg_id", "passed", "detail")` | Subset of `CheckRecord` fields exposed to Jinja templates |
+| `fields`            | `Sequence[str] \| Sequence[FieldSpec]` | every `DEFAULT_FIELDS` in both reports | Subset of fields exposed to the Jinja templates; each entry may be a plain string (field in both reports) or a `FieldSpec`/mapping to scope a field to one report (see §11) |
 | `include_passed`    | `bool`                              | `True`        | Include passing records                                       |
 | `include_failed`    | `bool`                              | `True`        | Include failing records                                       |
 | `filter`            | `Callable[[CheckRecord], bool]`     | `None`        | Additional filter; runs after the include toggles             |
@@ -158,7 +158,7 @@ The returned `TestSummary` exposes `passed`, `failed` (`list[CheckRecord]`),
 Clear the WARNING-test summary accumulator. Useful in test fixtures to start
 each case from a clean slate.
 
-### `CheckRecord` / `TestSummary`
+### `CheckRecord` / `TestSummary` / `FieldSpec`
 
 Dataclasses returned by the summary API.
 
@@ -171,13 +171,24 @@ class CheckRecord:
     passed: bool
     detail: str
     test_id: str = ""  # populated by the user-supplied test_id_function
+    extras: Mapping[str, Any] = field(default_factory=dict)  # **kwargs
 
 @dataclass
 class TestSummary:
     passed: List[CheckRecord]
     failed: List[CheckRecord]
     # properties: passed_count, failed_count, total, ok
+
+@dataclass(frozen=True)
+class FieldSpec:
+    name: str
+    reports: tuple[str, ...] = ("test_performed", "test_results")
 ```
+
+`extras` is where `**kwargs` passed to `check_value` /
+`check_value_in_range` land (see [§12](#12-pass-extras-to-check_-for-yml-declared-fields)).
+`FieldSpec` is the per-field record used by `SegDocument.fields`
+to control which report(s) each field appears in.
 
 ### `set_test_id_function(func=None)`, `get_test_id_function() -> callable`
 
@@ -493,11 +504,15 @@ convenience layer rather than a hard override. Unknown keys raise
 ```yaml
 fields:
   - test_id
-  - msg
+  - name: msg_id
+    reports: test_performed      # only in test_performed
+  - name: msg
+    reports: test_results        # only in test_results
+  - name: detail
+    reports: test_results
   - scope
-  - msg_id
   - passed
-  - detail
+  - operator                     # both reports (default)
 include_passed: true
 include_failed: true
 test_id_function: "my_pkg.test_id_helpers:make_test_id"
@@ -514,6 +529,13 @@ doc = SegDocument(
 )
 ```
 
+Each `fields` entry is either a plain string (the field name; the
+field appears in **both** rendered reports) or a mapping with
+`name` + `reports` keys. `reports` accepts `"test_performed"`,
+`"test_results"`, or `"all"`, either as a single string or a list.
+Field names must be valid Python identifiers (they become Jinja
+attribute names inside the templates).
+
 `test_id_function` follows the same `"package.module:attr"`
 convention as `logging.config.dictConfig` and `pickle`. It is
 resolved when `SegDocument` is constructed and installed globally
@@ -521,6 +543,44 @@ via `set_test_id_function` so the same id ends up in the log lines
 emitted by `check_value` as well.
 
 Working example: [examples/08_test_id_and_yaml](examples/08_test_id_and_yaml).
+
+### 12. Pass `**extras` to `check_*` for YML-declared fields
+
+A WARNING-level `CheckRecord` carries an `extras: Mapping[str, Any]`
+dict. `check_value` / `check_value_in_range` accept any keyword
+argument whose name doesn't collide with a named parameter, and
+those kwargs land in `extras`:
+
+```python
+check_value(
+    0xDEAD, 0xDEAD,
+    alert_level=AlertLevel.WARNING,
+    msg="REG0 OK", scope="reg_walk", msg_id="ID_REG0",
+    operator="alice",       # → extras["operator"] = "alice"
+    retries=3,              # → extras["retries"]  = 3
+)
+```
+
+YML-declared extras (e.g. `operator` in the snippet above) are
+surfaced in the rendered report. Extras that are not declared in
+the YML are silently dropped from the report (but still live on
+the record). A YML field that was *not* supplied for a particular
+check shows up as the empty string in that row — that is the
+"default for unspecified fields" contract:
+
+```
+| test_id                | msg     | operator |
+|------------------------|---------|----------|
+| reg_walk.ID_REG0.0001  | REG0 OK | alice    |
+| reg_walk.ID_REG3.0004  | REG3…   |          |   # no operator → ""
+```
+
+Field names that match a built-in `CheckRecord` attribute
+(`scope`, `msg`, `msg_id`, `passed`, `detail`, `test_id`) are
+reserved: pass them as the named parameter to populate the
+built-in. (If you really need a same-named extra, the record can
+still be built directly via `CheckRecord(extras=...)`, but the
+projection prefers `extras` over the built-in when both are set.)
 
 ---
 
@@ -551,7 +611,7 @@ raise `NotImplementedError`. Port to cocotb if you need them.
 
 ```bash
 uv sync --extra docs   # one-time venv + dev deps + docs extra
-uv run pytest     # 69 tests
+uv run pytest     # 98 tests
 
 # Run the example scripts (one per feature)
 for d in examples/0?_*/; do uv run python "$d/example.py"; done

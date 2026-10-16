@@ -15,7 +15,7 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, List, Optional, Sequence, TextIO
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, TextIO
 
 
 # --------------------------------------------------------------------------- #
@@ -103,6 +103,15 @@ class CheckRecord:
     ``test_id == ""``) and a 1-indexed sequence number; whatever it
     returns is stored as the record's ``test_id``. Reset
     :func:`reset_test_summary` also resets that sequence.
+
+    `extras` holds the user-supplied YML-declared fields passed as
+    ``**kwargs`` to :func:`check_value` / :func:`check_value_in_range`
+    (e.g. ``operator="alice"``, ``notes="tested 3 times"``). Each
+    entry is preserved as-is on the record and surfaced by
+    :class:`hwval.docs.SegDocument` whenever the matching YML
+    field-name requests it for a given report. Fields declared in
+    the YML but absent from a particular check default to the empty
+    string in the rendered report.
     """
 
     scope: str
@@ -111,6 +120,7 @@ class CheckRecord:
     passed: bool
     detail: str
     test_id: str = ""
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
 
 _summary_records: List[CheckRecord] = []
@@ -275,6 +285,7 @@ def _emit(
     msg_id: str,
     radix: Radix,
     match: Optional[MatchStrictness],
+    extras: Optional[Mapping[str, Any]] = None,
 ) -> None:
     level = _ALERT_TO_LEVEL[alert_level]
     status = "PASS" if passed else "FAIL"
@@ -289,12 +300,16 @@ def _emit(
     _logger.log(level, "%s%s", head, detail)
 
     if alert_level in _TRACKED_LEVELS:
+        # Copy extras so the frozen dataclass doesn't hold an alias to
+        # the caller's mutable dict.
+        extras_dict: Dict[str, Any] = dict(extras) if extras else {}
         rec = CheckRecord(
             scope=scope,
             msg_id=msg_id,
             msg=msg,
             passed=passed,
             detail=detail,
+            extras=extras_dict,
         )
         # Apply the user-supplied test_id function (or the default).
         # The function may rely on any of the record's fields plus the
@@ -432,11 +447,18 @@ def check_value(
     msg_id: str = "ID_POS_ACK",
     radix: Radix = Radix.HEX_BIN_IF_INVALID,
     match_strictness: MatchStrictness = MatchStrictness.MATCH_STD,
+    **extras: Any,
 ) -> bool:
     """Check that `value == exp`.
 
     Positional extra args (UVVM compatibility): if the first positional after
     `exp` is a `MatchStrictness`, it is consumed as `match_strictness`.
+
+    Keyword-only ``**extras`` captures user-supplied YML-declared fields
+    (e.g. ``operator="alice"``, ``notes="retried 3x"``) and stores them
+    on the record's :attr:`CheckRecord.extras` dict. They never clash
+    with the named parameters above; any kwarg whose name does not
+    match a named parameter lands in ``extras``.
 
     Returns True on pass, False on fail. On FAIL with *_FAILURE/*_ERROR
     severity, also raises AssertionError.
@@ -451,7 +473,18 @@ def check_value(
             )
 
     passed = bool(value == exp)
-    _emit(passed, value, exp, alert_level, msg, scope, msg_id, radix, match_strictness)
+    _emit(
+        passed,
+        value,
+        exp,
+        alert_level,
+        msg,
+        scope,
+        msg_id,
+        radix,
+        match_strictness,
+        extras=extras or None,
+    )
     return passed
 
 
@@ -465,8 +498,14 @@ def check_value_in_range(
     scope: str = "C_TB_SCOPE_DEFAULT",
     msg_id: str = "ID_POS_ACK",
     radix: Radix = Radix.DEC,
+    **extras: Any,
 ) -> bool:
     """Check that ``min_value <= value <= max_value``.
+
+    Keyword-only ``**extras`` is the same as for :func:`check_value`:
+    any kwarg whose name does not match a named parameter lands in the
+    record's :attr:`CheckRecord.extras` dict, ready to be reported by
+    a YML-declared field.
 
     Returns True if in range, False otherwise. Raises AssertionError on
     out-of-range *_FAILURE/*_ERROR.
@@ -487,6 +526,7 @@ def check_value_in_range(
         msg_id=msg_id,
         radix=radix,
         match=None,
+        extras=extras or None,
     )
     return passed
 

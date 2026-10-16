@@ -119,28 +119,80 @@ class SegDocumentTests(unittest.TestCase):
     # ---- construction ---------------------------------------------------- #
 
     def test_construct_with_default_fields(self):
-        from hwval.docs import SegDocument
+        from hwval.docs import FieldSpec, SegDocument
 
         d = SegDocument(
             test_template=self.test_template,
             results_template=self.results_template,
         )
         self.assertEqual(
-            d.fields,
+            [f.name for f in d.fields],
             ["test_id", "msg", "scope", "msg_id", "passed", "detail"],
         )
+        # Each default field appears in BOTH reports.
+        for f in d.fields:
+            self.assertEqual(
+                f.reports, ("test_performed", "test_results")
+            )
+        # And the objects are real FieldSpec instances.
+        self.assertTrue(all(isinstance(f, FieldSpec) for f in d.fields))
 
     def test_construct_with_custom_fields(self):
-        from hwval.docs import SegDocument
+        from hwval.docs import FieldSpec, SegDocument
 
         d = SegDocument(
             test_template=self.test_template,
             results_template=self.results_template,
             fields=("msg", "scope"),
         )
-        self.assertEqual(d.fields, ["msg", "scope"])
+        self.assertEqual([f.name for f in d.fields], ["msg", "scope"])
+        self.assertTrue(all(isinstance(f, FieldSpec) for f in d.fields))
 
-    def test_construct_rejects_unknown_field(self):
+    def test_construct_accepts_field_spec_dicts(self):
+        from hwval.docs import SegDocument
+
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            fields=[
+                "test_id",
+                {"name": "msg", "reports": "test_results"},
+                {"name": "operator", "reports": [
+                    "test_performed", "test_results"]},
+            ],
+        )
+        self.assertEqual([f.name for f in d.fields],
+                         ["test_id", "msg", "operator"])
+        self.assertEqual(d.fields[0].reports,
+                         ("test_performed", "test_results"))
+        self.assertEqual(d.fields[1].reports, ("test_results",))
+        self.assertEqual(d.fields[2].reports,
+                         ("test_performed", "test_results"))
+
+    def test_construct_rejects_duplicate_field_names(self):
+        from hwval.docs import SegDocument
+
+        with self.assertRaises(ValueError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                fields=("msg", "scope", "msg"),
+            )
+
+    def test_construct_rejects_non_identifier_field_name(self):
+        from hwval.docs import SegDocument
+
+        with self.assertRaises(ValueError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                fields=("msg", "1bad-name"),
+            )
+
+    def test_unknown_field_defaults_to_empty_string(self):
+        # Per the new contract: a YML-declared field that has no data
+        # in a particular record shows up as "" in the rendered docx,
+        # not as an error.
         from hwval.docs import SegDocument
 
         d = SegDocument(
@@ -148,11 +200,11 @@ class SegDocumentTests(unittest.TestCase):
             results_template=self.results_template,
             fields=("msg", "nope"),
         )
-        with self.assertRaises(AttributeError):
-            d._generate(
-                test_output=self.root / "out.docx",
-                results_output=self.root / "out2.docx",
-            )
+        # No exception; "nope" becomes "" in the projection.
+        test_out = self.root / "out.docx"
+        results_out = self.root / "out2.docx"
+        d._generate(test_output=test_out, results_output=results_out)
+        self.assertTrue(test_out.is_file())
 
     # ---- _generate basics ------------------------------------------------- #
 
@@ -343,6 +395,200 @@ class SegDocumentTests(unittest.TestCase):
         # ISO 8601 UTC like 2026-09-18T09:26:00+00:00
         self.assertRegex(ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2}$")
 
+    # ---- per-report fields + extras + missing-field default ----------- #
+
+    def test_extras_appear_in_render_when_field_declared(self):
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "extras.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.test_id }}|{{ rec.operator }}|{{ rec.msg }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "extras_out.docx"
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=("test_id", "operator", "msg"),
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        # setUp pre-populates 4 records, none of which pass `operator`,
+        # so all rows must show "" for it.
+        self.assertIn("TID_0001||REG0 readback", text)
+        self.assertIn("TID_0004||REG3 readback", text)
+
+    def test_extras_passed_in_check_value_show_up(self):
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "with_extras.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.test_id }}|{{ rec.operator }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "with_extras_out.docx"
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=("test_id", "operator"),
+        )
+        # Add an extra record with `operator` supplied.
+        check_value(
+            0xAB, 0xAB, alert_level=AlertLevel.WARNING,
+            msg="REG_EXTRA", scope="reg_walk", msg_id="ID_REG_EXTRA",
+            operator="alice",
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        # The new record has operator=alice; the others are empty.
+        self.assertIn("TID_0005|alice", text)
+        # The old ones still get "" (per the contract).
+        self.assertIn("TID_0001|", text)
+        reset_test_summary()
+
+    def test_missing_field_defaults_to_empty_string(self):
+        # The user spec: a YML-declared field that is not passed to
+        # check_value must show up as "" in the report, not raise.
+        from hwval.docs import _record_to_dict
+
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="x")
+        s = current_summary()
+        d = _record_to_dict(s.passed[0], ["test_id", "operator", "notes"])
+        self.assertEqual(d["test_id"], "TID_0001")
+        self.assertEqual(d["operator"], "")
+        self.assertEqual(d["notes"], "")
+
+    def test_extras_override_builtin_when_names_collide(self):
+        # An extra named exactly like a built-in field wins via the
+        # projection (extras are checked first), letting the user
+        # override `scope`/`msg` if they really want to. (The named
+        # kwargs on check_value still go to the built-ins, so the
+        # only way to put a same-named value in extras is to build
+        # the record directly — which is what this test does.)
+        from hwval import CheckRecord
+        from hwval.docs import _record_to_dict
+
+        rec = CheckRecord(
+            scope="builtin_scope",
+            msg_id="ID_X",
+            msg="builtin_msg",
+            passed=True,
+            detail="d",
+            extras={"scope": "override_scope", "msg": "override_msg"},
+        )
+        d = _record_to_dict(rec, ["scope", "msg"])
+        self.assertEqual(d["scope"], "override_scope")
+        self.assertEqual(d["msg"], "override_msg")
+
+    def test_per_report_fields_filter_each_template(self):
+        from hwval.docs import SegDocument
+
+        # Two distinct templates: test_performed shows only the first
+        # two fields, test_results shows the last two. The `msg` field
+        # is restricted to test_results.
+        performed_tpl = self.root / "performed.docx"
+        results_tpl = self.root / "results.docx"
+        _make_template(
+            performed_tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.test_id }}|{{ rec.scope }}",
+                "{%p endfor %}",
+            ],
+        )
+        _make_template(
+            results_tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.msg }}|{{ rec.detail }}",
+                "{%p endfor %}",
+            ],
+        )
+        out_p = self.root / "performed_out.docx"
+        out_r = self.root / "results_out.docx"
+        d = SegDocument(
+            test_template=performed_tpl,
+            results_template=results_tpl,
+            fields=[
+                {"name": "test_id", "reports": [
+                    "test_performed", "test_results"]},
+                {"name": "scope", "reports": "test_performed"},
+                {"name": "msg", "reports": "test_results"},
+                {"name": "detail", "reports": "test_results"},
+            ],
+        )
+        d._generate(test_output=out_p, results_output=out_r)
+
+        from docx import Document
+        performed_text = " ".join(
+            p.text for p in Document(str(out_p)).paragraphs
+        )
+        results_text = " ".join(
+            p.text for p in Document(str(out_r)).paragraphs
+        )
+        # test_performed sees test_id+scope
+        self.assertIn("TID_0001|reg_walk", performed_text)
+        self.assertNotIn("REG0 readback", performed_text)
+        # test_results sees msg+detail
+        self.assertIn("REG1 readback|", results_text)
+        self.assertNotIn("reg_walk", results_text)
+
+    def test_per_report_field_list_in_jinja_fields_placeholder(self):
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "hdr.docx"
+        _make_template(tpl, ["{{ fields|join(',') }}"])
+        performed = self.root / "performed.docx"
+        results = self.root / "results.docx"
+        # Same template for both so we can assert the two outputs
+        # carry different field lists.
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=[
+                {"name": "test_id", "reports": [
+                    "test_performed", "test_results"]},
+                {"name": "scope", "reports": "test_performed"},
+                {"name": "msg", "reports": "test_results"},
+            ],
+        )
+        d._generate(test_output=performed, results_output=results)
+        self.assertEqual(_read_paragraphs(performed)[0],
+                         "test_id,scope")
+        self.assertEqual(_read_paragraphs(results)[0],
+                         "test_id,msg")
+
+    def test_fields_for_report_property(self):
+        from hwval.docs import SegDocument
+
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            fields=[
+                "test_id",
+                {"name": "scope", "reports": "test_performed"},
+                {"name": "msg", "reports": "test_results"},
+                {"name": "operator"},  # all reports
+            ],
+        )
+        # _fields_for_report is a private helper but worth pinning.
+        performed = d._fields_for_report("test_performed")
+        results_ = d._fields_for_report("test_results")
+        self.assertEqual([f.name for f in performed],
+                         ["test_id", "scope", "operator"])
+        self.assertEqual([f.name for f in results_],
+                         ["test_id", "msg", "operator"])
+
     # ---- error paths ----------------------------------------------------- #
 
     def test_missing_template_raises(self):
@@ -487,7 +733,7 @@ class SegDocumentTests(unittest.TestCase):
             test_template=self.test_template,
             results_template=self.results_template,
         )
-        self.assertIn("test_id", d.fields)
+        self.assertIn("test_id", [f.name for f in d.fields])
 
     def test_test_id_visible_in_rendered_template(self):
         from hwval.docs import SegDocument
@@ -514,7 +760,7 @@ class SegDocumentTests(unittest.TestCase):
 
     @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
     def test_config_yml_loads_fields(self):
-        from hwval.docs import SegDocument
+        from hwval.docs import FieldSpec, SegDocument
 
         cfg = self.root / "hwval.yml"
         cfg.write_text(
@@ -528,7 +774,37 @@ class SegDocumentTests(unittest.TestCase):
             results_template=self.results_template,
             config=cfg,
         )
-        self.assertEqual(d.fields, ["test_id", "msg", "scope"])
+        self.assertEqual([f.name for f in d.fields],
+                         ["test_id", "msg", "scope"])
+        self.assertTrue(all(isinstance(f, FieldSpec) for f in d.fields))
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_loads_per_report_fields(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text(
+            "fields:\n"
+            "  - test_id\n"
+            "  - name: msg\n"
+            "    reports: test_results\n"
+            "  - name: scope\n"
+            "    reports:\n"
+            "      - test_performed\n"
+            "      - test_results\n"
+        )
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            config=cfg,
+        )
+        self.assertEqual([f.name for f in d.fields],
+                         ["test_id", "msg", "scope"])
+        self.assertEqual(d.fields[0].reports,
+                         ("test_performed", "test_results"))
+        self.assertEqual(d.fields[1].reports, ("test_results",))
+        self.assertEqual(d.fields[2].reports,
+                         ("test_performed", "test_results"))
 
     @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
     def test_config_yml_loads_include_toggles(self):
@@ -596,8 +872,42 @@ class SegDocumentTests(unittest.TestCase):
         )
         # Explicit kwargs take precedence over the YAML.
         self.assertEqual(
-            d.fields, ["test_id", "msg", "scope", "msg_id"]
+            [f.name for f in d.fields],
+            ["test_id", "msg", "scope", "msg_id"],
         )
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_rejects_duplicate_field_name(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text(
+            "fields:\n"
+            "  - msg\n"
+            "  - msg\n"
+        )
+        with self.assertRaises(ValueError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                config=cfg,
+            )
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_rejects_non_identifier_field_name(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text(
+            "fields:\n"
+            "  - 1bad-name\n"
+        )
+        with self.assertRaises(ValueError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                config=cfg,
+            )
 
     @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
     def test_config_yml_unknown_key_raises(self):
@@ -634,6 +944,70 @@ class SegDocumentTests(unittest.TestCase):
                 results_template=self.results_template,
                 config=self.root / "nope.yml",
             )
+
+    # ---- FieldSpec unit tests ---------------------------------------- #
+
+    def test_fieldspec_coerce_from_string(self):
+        from hwval.docs import FieldSpec
+
+        spec = FieldSpec.coerce("msg")
+        self.assertEqual(spec.name, "msg")
+        # Default = both reports.
+        self.assertEqual(spec.reports,
+                         ("test_performed", "test_results"))
+
+    def test_fieldspec_coerce_from_dict(self):
+        from hwval.docs import FieldSpec
+
+        spec = FieldSpec.coerce({"name": "msg", "reports": "test_results"})
+        self.assertEqual(spec.name, "msg")
+        self.assertEqual(spec.reports, ("test_results",))
+
+    def test_fieldspec_coerce_from_dict_with_list(self):
+        from hwval.docs import FieldSpec
+
+        spec = FieldSpec.coerce(
+            {"name": "x", "reports": ["test_performed"]}
+        )
+        self.assertEqual(spec.reports, ("test_performed",))
+
+    def test_fieldspec_coerce_passthrough(self):
+        from hwval.docs import FieldSpec
+
+        spec = FieldSpec(name="x")
+        self.assertIs(FieldSpec.coerce(spec), spec)
+
+    def test_fieldspec_coerce_rejects_unknown_type(self):
+        from hwval.docs import FieldSpec
+
+        with self.assertRaises(TypeError):
+            FieldSpec.coerce(42)
+
+    def test_fieldspec_coerce_dict_without_name_raises(self):
+        from hwval.docs import FieldSpec
+
+        with self.assertRaises(ValueError):
+            FieldSpec.coerce({"reports": "test_results"})
+
+    def test_fieldspec_all_alias_expands(self):
+        from hwval.docs import FieldSpec
+
+        spec = FieldSpec(name="x", reports=("all",))
+        self.assertEqual(spec.reports,
+                         ("test_performed", "test_results"))
+
+    def test_fieldspec_invalid_report_name_raises(self):
+        from hwval.docs import FieldSpec
+
+        with self.assertRaises(ValueError):
+            FieldSpec(name="x", reports=("nope",))
+
+    def test_fieldspec_in_report(self):
+        from hwval.docs import FieldSpec
+
+        spec = FieldSpec(name="x", reports=("test_results",))
+        self.assertFalse(spec.in_report("test_performed"))
+        self.assertTrue(spec.in_report("test_results"))
 
     @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
     def test_config_yml_missing_pyyaml_raises_clear_error(self):

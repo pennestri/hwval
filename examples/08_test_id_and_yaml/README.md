@@ -1,6 +1,6 @@
-# 08 · `test_id` field + YML-driven `SegDocument` config
+# 08 · `test_id` field + YML-driven `SegDocument` config + per-report fields + `**extras`
 
-Two new pieces of `hwval` that work together nicely:
+Four things, all working together in this example:
 
 1. **A `test_id` field on every WARNING-level `CheckRecord`.** The id
    comes from a user-supplied *update function* that sees the record
@@ -10,11 +10,17 @@ Two new pieces of `hwval` that work together nicely:
    exposes, the include toggles, and the test-id update function can
    all live in a `hwval.yml` next to the test code. Edit the YAML,
    re-run, the report layout updates — no Python change required.
-
-The YML loader takes the same keys the `SegDocument` constructor does
-(`fields`, `include_passed`, `include_failed`, `test_id_function`).
-Explicit constructor arguments always win over the YAML, so you can
-override on a per-call basis.
+3. **Per-report field scoping.** Each field in the YML can be
+   tagged with which report it appears in: `test_performed`,
+   `test_results`, or both. The same `SegDocument` then drives two
+   reports with different column sets.
+4. **`**extras` on `check_value` / `check_value_in_range`.** Any
+   kwarg whose name doesn't match a built-in parameter lands in
+   `CheckRecord.extras`. YML-declared extras are surfaced in the
+   report; undeclared ones are silently dropped. A YML-declared
+   field that was *not* passed for a particular check shows up as
+   the empty string in that row (per the "missing field defaults
+   to empty string" contract).
 
 ## Requirements
 
@@ -39,7 +45,7 @@ uv run python examples/08_test_id_and_yaml/example.py
 examples/08_test_id_and_yaml/
 ├── README.md
 ├── example.py           # generates templates, runs checks, renders docs
-├── hwval.yml            # drives the SegDocument config
+├── hwval.yml            # drives the SegDocument config + per-report split
 ├── test_id_helpers.py   # the user-supplied test_id update function
 └── out/                 # rendered .docx files end up here
 ```
@@ -49,37 +55,42 @@ examples/08_test_id_and_yaml/
 | Step | Demonstrates                                                          |
 | ---: | --------------------------------------------------------------------- |
 | 1    | A user-supplied `test_id` function in `test_id_helpers.py`           |
-| 2    | Driving the same knobs (fields, toggles, id function) from `hwval.yml` |
-| 3    | Loading the YAML via `SegDocument(..., config="hwval.yml")`           |
-| 4    | The `test_id` field appearing in the rendered docx alongside the others |
+| 2    | Per-field `reports` in `hwval.yml` (test_performed / test_results)    |
+| 3    | `**extras` on `check_value` → land in `CheckRecord.extras`            |
+| 4    | Loading the YAML via `SegDocument(..., config="hwval.yml")`           |
+| 5    | Missing field in `extras` → renders as `""` in the report             |
 
 ## YAML format
 
 ```yaml
 # hwval.yml
 fields:
-  - test_id
-  - msg
-  - scope
-  - msg_id
-  - passed
-  - detail
+  - test_id                                    # both reports (default)
+  - name: msg_id
+    reports: test_performed                    # only in test_performed
+  - name: msg
+    reports: test_results                      # only in test_results
+  - name: detail
+    reports: test_results
+  - operator                                   # both reports
+
 include_passed: true
 include_failed: true
-test_id_function: "examples.test_id_helpers:make_test_id"
+
+test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
 ```
 
-- `fields` is the list of `CheckRecord` attribute names exposed to the
-  Jinja templates. Anything not listed is invisible inside the
-  template.
-- `include_passed` / `include_failed` toggle the two record buckets
-  the docx reports emit.
-- `test_id_function` is a `"package.module:attr"` reference (same
-  convention as `logging.config.dictConfig` and `pickle`) to a
-  function with signature `(record, sequence) -> str`.
-
-Any unknown key in the YAML is a hard error so typos surface early
-instead of being silently ignored.
+- Each field is either a plain string (the field name; appears in
+  *both* reports) or a mapping with `name` + `reports`.
+- `reports` accepts:
+  - a single string: `"all"`, `"test_performed"`, `"test_results"`.
+  - a list of those strings.
+- Omit `reports` (or use a plain string for the whole field) to
+  default to "both reports".
+- Any unknown top-level key is a hard error so typos surface
+  immediately.
+- Field names must be valid Python identifiers (they become Jinja
+  attribute names inside the templates).
 
 ## test_id function shape
 
@@ -93,3 +104,25 @@ The function sees the `CheckRecord` *before* `test_id` is filled in
 `reset_test_summary()`. It returns the new id as a string. Anything
 the function can compute — hash, counter, scope+msg combo, time
 prefix, … — is fair game.
+
+## Extras from check_value
+
+`check_value` / `check_value_in_range` accept arbitrary keyword
+arguments after the named ones. They land on the record's
+`extras` dict:
+
+```python
+check_value(
+    0xDEAD, 0xDEAD,
+    alert_level=AlertLevel.WARNING,
+    msg="REG0 OK", scope="reg_walk", msg_id="ID_REG0",
+    operator="alice",        # → extras["operator"] = "alice"
+    # seq_id="A1",          # not in the YML → stored, never rendered
+)
+```
+
+`scope`, `msg`, `msg_id`, `radix`, etc. are reserved (named
+parameters of `check_value`); pass anything else and it shows up
+in `extras`. The rendered report only displays fields listed in
+the YML; a YML field that no record supplied shows as `""` in
+that row.
