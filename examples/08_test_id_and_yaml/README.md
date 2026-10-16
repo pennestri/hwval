@@ -44,11 +44,22 @@ uv run python examples/08_test_id_and_yaml/example.py
 ```
 examples/08_test_id_and_yaml/
 ├── README.md
-├── example.py           # generates templates, runs checks, renders docs
-├── hwval.yml            # drives the SegDocument config + per-report split
-├── test_id_helpers.py   # the user-supplied test_id update function
-└── out/                 # rendered .docx files end up here
+├── example.py            # runs checks, loads templates, renders docs
+├── build_templates.py    # regenerates the two .docx templates
+├── hwval.yml             # drives the SegDocument config + per-report split
+├── test_id_helpers.py    # the user-supplied test_id update function
+├── templates/
+│   ├── test_performed.docx   # loaded by example.py (test performed)
+│   └── test_results.docx     # loaded by example.py (test results)
+└── out/                  # rendered .docx files end up here
 ```
+
+The two `.docx` files in `templates/` are regular Word documents
+maintained in Word / LibreOffice. `example.py` loads them straight
+from disk — there is no in-Python template builder. Open them in
+Word, change the placeholders, fonts, tables, footers, … and
+re-run `example.py` to see the change in the rendered output.
+`build_templates.py` regenerates the originals.
 
 ## What it shows
 
@@ -58,7 +69,9 @@ examples/08_test_id_and_yaml/
 | 2    | Per-field `reports` in `hwval.yml` (test_performed / test_results)    |
 | 3    | `**extras` on `check_value` → land in `CheckRecord.extras`            |
 | 4    | Loading the YAML via `SegDocument(..., config="hwval.yml")`           |
-| 5    | Missing field in `extras` → renders as `""` in the report             |
+| 5    | Loading the two `.docx` templates from `templates/` by path          |
+| 6    | Missing field in `extras` → renders as `""` in the report             |
+| 7    | Both `check_value` *and* `check_value_in_range` in the same run       |
 
 ## YAML format
 
@@ -126,3 +139,41 @@ parameters of `check_value`); pass anything else and it shows up
 in `extras`. The rendered report only displays fields listed in
 the YML; a YML field that no record supplied shows as `""` in
 that row.
+
+## Editing the templates
+
+The two `.docx` files in `templates/` are regular Word documents.
+Open them in Word or LibreOffice and edit the placeholders,
+headings, fonts, tables, footers, etc. — the Jinja / docxtpl
+syntax stays valid as long as you don't damage the placeholder
+text itself. Re-run `example.py` to see the change in the
+rendered output.
+
+The placeholders you can use:
+
+| Placeholder                          | Source                                        |
+| ------------------------------------ | --------------------------------------------- |
+| `{{ project }}`, `{{ operator }}`    | `SegDocument(extra_context=...)`              |
+| `{{ generated_at }}`                 | ISO 8601 UTC, set by `SegDocument._generate` |
+| `{{ summary.total }}`                | total record count for the report             |
+| `{{ summary.passed_count }}`         | passing record count                          |
+| `{{ summary.failed_count }}`         | failing record count                          |
+| `{{ fields|join(', ') }}`            | field names declared for this report          |
+| `{{ rec.<field> }}`                  | every YML-declared field on each record       |
+
+Control tags (each on its own paragraph, exactly as written):
+
+| Tag                          | Effect                                                       |
+| ---------------------------- | ------------------------------------------------------------ |
+| `{%p for rec in records %}`  | paragraph-level iteration over every record                 |
+| `{%p for rec in failed %}`   | same, but only failing records                               |
+| `{%p endfor %}`              | close the iteration                                          |
+
+To start over from a clean starter, run:
+
+```bash
+uv run python examples/08_test_id_and_yaml/build_templates.py
+```
+
+That regenerates the original two templates (overwriting any
+edits you made, so back up first if you want to keep them).
