@@ -16,6 +16,12 @@ try:
 except ImportError:  # pragma: no cover - depends on optional extra
     HAS_DOCXTPL = False
 
+try:
+    import yaml  # noqa: F401
+    HAS_YAML = True
+except ImportError:  # pragma: no cover - depends on optional extra
+    HAS_YAML = False
+
 
 from hwval import (  # noqa: E402  (after the optional guard)
     AlertLevel,
@@ -57,6 +63,12 @@ class SegDocumentTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        # Keep tests independent: any YML-driven test_id_function
+        # install in this test must not leak to the next.
+        from hwval import get_test_id_function, set_test_id_function
+        self._prev_tid_fn = get_test_id_function()
+        set_test_id_function()
+        self.addCleanup(set_test_id_function, self._prev_tid_fn)
 
         # Two minimal templates: "test performed" lists records that ran,
         # "test results" lists failed records with their detail line.
@@ -115,7 +127,7 @@ class SegDocumentTests(unittest.TestCase):
         )
         self.assertEqual(
             d.fields,
-            ["msg", "scope", "msg_id", "passed", "detail"],
+            ["test_id", "msg", "scope", "msg_id", "passed", "detail"],
         )
 
     def test_construct_with_custom_fields(self):
@@ -372,6 +384,285 @@ class SegDocumentTests(unittest.TestCase):
                 SegDocument(
                     test_template=self.test_template,
                     results_template=self.results_template,
+                )
+        finally:
+            builtins.__import__ = original_import
+            sys.modules.update(hidden)
+
+    # ---- test_id_function + YML config -------------------------------- #
+
+    def test_test_id_function_callable_installs_globally(self):
+        from hwval import get_test_id_function
+        from hwval.docs import SegDocument
+
+        def my_fn(record, seq):
+            return f"MY_{seq:03d}"
+
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            test_id_function=my_fn,
+        )
+        self.assertIs(d.test_id_function, my_fn)
+        self.assertIs(get_test_id_function(), my_fn)
+        # The function is re-applied to the existing records; each
+        # record keeps its 1-indexed position in the accumulator.
+        # setUp pre-populates 4 checks in the order
+        # [REG0 pass, REG1 fail, REG2 pass, REG3 fail].
+        s = current_summary()
+        self.assertEqual(s.passed[0].test_id, "MY_001")  # REG0
+        self.assertEqual(s.failed[0].test_id, "MY_002")  # REG1
+        self.assertEqual(s.passed[1].test_id, "MY_003")  # REG2
+        self.assertEqual(s.failed[1].test_id, "MY_004")  # REG3
+
+    def test_test_id_function_string_path_is_resolved(self):
+        import sys
+        import types
+
+        from hwval import get_test_id_function
+        from hwval.docs import SegDocument
+
+        mod = types.ModuleType("_hwval_test_tid_mod")
+        mod.make_tid = lambda rec, seq: f"PATH_{seq:03d}"
+        sys.modules["_hwval_test_tid_mod"] = mod
+        try:
+            d = SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                test_id_function="_hwval_test_tid_mod:make_tid",
+            )
+            self.assertIs(d.test_id_function, mod.make_tid)
+            self.assertIs(get_test_id_function(), mod.make_tid)
+        finally:
+            del sys.modules["_hwval_test_tid_mod"]
+
+    def test_test_id_function_none_does_not_overwrite(self):
+        from hwval import get_test_id_function, set_test_id_function
+        from hwval.docs import SegDocument
+
+        sentinel = lambda rec, seq: "SENTINEL"
+        set_test_id_function(sentinel)
+
+        SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            test_id_function=None,
+        )
+        # Existing function is preserved.
+        self.assertIs(get_test_id_function(), sentinel)
+
+    def test_test_id_function_rejects_invalid_type(self):
+        from hwval.docs import SegDocument
+
+        with self.assertRaises(TypeError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                test_id_function=42,
+            )
+
+    def test_resolve_callable_rejects_malformed_string(self):
+        from hwval.docs import _resolve_callable
+
+        with self.assertRaises(ValueError):
+            _resolve_callable("no_colon_in_string")
+
+    def test_resolve_callable_rejects_unknown_attr(self):
+        from hwval.docs import _resolve_callable
+
+        with self.assertRaises(AttributeError):
+            _resolve_callable("os:nope_no_such_attr")
+
+    def test_resolve_callable_rejects_non_callable_attr(self):
+        from hwval.docs import _resolve_callable
+
+        # `os` has a `sep` attribute, but it's a str, not a callable.
+        with self.assertRaises(TypeError):
+            _resolve_callable("os:sep")
+
+    def test_test_id_in_default_fields(self):
+        from hwval.docs import SegDocument
+
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+        )
+        self.assertIn("test_id", d.fields)
+
+    def test_test_id_visible_in_rendered_template(self):
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "tid.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.test_id }}|{{ rec.msg }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "tid_out.docx"
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        self.assertIn("TID_0001|REG0 readback", text)
+        self.assertIn("TID_0004|REG3 readback", text)
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_loads_fields(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text(
+            "fields:\n"
+            "  - test_id\n"
+            "  - msg\n"
+            "  - scope\n"
+        )
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            config=cfg,
+        )
+        self.assertEqual(d.fields, ["test_id", "msg", "scope"])
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_loads_include_toggles(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text(
+            "include_passed: false\n"
+            "include_failed: true\n"
+        )
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            config=cfg,
+        )
+        self.assertFalse(d.include_passed)
+        self.assertTrue(d.include_failed)
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_installs_test_id_function(self):
+        import sys
+        import types
+
+        from hwval import get_test_id_function
+        from hwval.docs import SegDocument
+
+        mod = types.ModuleType("_hwval_test_yml_tid_mod")
+        mod.yml_tid = lambda rec, seq: f"YML_{seq:03d}"
+        sys.modules["_hwval_test_yml_tid_mod"] = mod
+        try:
+            cfg = self.root / "hwval.yml"
+            cfg.write_text(
+                "test_id_function: "
+                "\"_hwval_test_yml_tid_mod:yml_tid\"\n"
+            )
+            d = SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                config=cfg,
+            )
+            self.assertIs(get_test_id_function(), mod.yml_tid)
+            # setUp pre-populates 4 records; YML re-stamps them all
+            # with the new function. First record was passed, so
+            # passed[0] carries the first id.
+            s = current_summary()
+            self.assertEqual(s.passed[0].test_id, "YML_001")
+        finally:
+            del sys.modules["_hwval_test_yml_tid_mod"]
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_explicit_kwargs_win(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text(
+            "fields:\n"
+            "  - msg\n"
+            "  - scope\n"
+        )
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            fields=("test_id", "msg", "scope", "msg_id"),
+            config=cfg,
+        )
+        # Explicit kwargs take precedence over the YAML.
+        self.assertEqual(
+            d.fields, ["test_id", "msg", "scope", "msg_id"]
+        )
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_unknown_key_raises(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text("nope: 1\n")
+        with self.assertRaises(ValueError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                config=cfg,
+            )
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_wrong_type_raises(self):
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text("fields: not-a-list\n")
+        with self.assertRaises(TypeError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                config=cfg,
+            )
+
+    def test_config_yml_missing_file_raises(self):
+        from hwval.docs import SegDocument
+
+        with self.assertRaises(FileNotFoundError):
+            SegDocument(
+                test_template=self.test_template,
+                results_template=self.results_template,
+                config=self.root / "nope.yml",
+            )
+
+    @unittest.skipUnless(HAS_YAML, "requires pyyaml (hwval[docs] extra)")
+    def test_config_yml_missing_pyyaml_raises_clear_error(self):
+        import builtins
+        import sys
+
+        from hwval.docs import SegDocument
+
+        cfg = self.root / "hwval.yml"
+        cfg.write_text("fields: [msg]\n")
+
+        hidden = sys.modules.copy()
+        for name in list(sys.modules):
+            if name == "yaml":
+                sys.modules.pop(name, None)
+        original_import = builtins.__import__
+
+        def _block(name, *a, **kw):
+            if name == "yaml":
+                raise ImportError("blocked for test")
+            return original_import(name, *a, **kw)
+
+        builtins.__import__ = _block
+        try:
+            with self.assertRaises(ImportError):
+                SegDocument(
+                    test_template=self.test_template,
+                    results_template=self.results_template,
+                    config=cfg,
                 )
         finally:
             builtins.__import__ = original_import

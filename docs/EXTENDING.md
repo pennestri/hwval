@@ -130,6 +130,52 @@ if __name__ == "__main__":
 Run as `python -m hwval` after running checks. The exit code is suitable
 for CI integration.
 
+## Derive `test_id` from your own scheme
+
+The default `test_id` is a sequential `TID_<seq:04d>`. Install a
+custom function to encode whatever makes sense in your project
+(scope + msg_id, a hash, a counter, a timestamp prefix, …):
+
+```python
+from hwval import set_test_id_function
+
+def make_test_id(record, seq):
+    return f"{record.scope}.{record.msg_id}.{seq:04d}"
+
+set_test_id_function(make_test_id)
+```
+
+The function receives the record *before* its `test_id` is filled in
+(field is `""`) plus a 1-indexed counter that resets on
+`reset_test_summary()`. When you swap the function, every record
+already in the accumulator is re-stamped with the new function (each
+record keeps its 1-indexed position) so the whole accumulator stays
+consistent with whichever function is active. A buggy function never
+breaks a check: the failure is caught, a DEBUG log line is emitted,
+and the default function takes over for that one record.
+
+If the function lives in a project module and you want to wire it
+without touching Python, point the YML config at it via the standard
+`"package.module:attr"` convention:
+
+```yaml
+# hwval.yml
+test_id_function: "my_pkg.test_id_helpers:make_test_id"
+```
+
+```python
+from hwval import SegDocument
+
+doc = SegDocument(
+    test_template="templates/test_performed.docx",
+    results_template="templates/test_results.docx",
+    config="hwval.yml",
+)
+```
+
+`SegDocument(..., config=...)` is the only piece that needs the
+optional `[docs]` extra (it pulls in PyYAML alongside docxtpl).
+
 ## Gotchas to remember
 
 - The `_summary_records` accumulator is **module-level**, not per-call.

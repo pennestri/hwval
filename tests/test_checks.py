@@ -14,9 +14,11 @@ from hwval import (
     TestSummary,
     check_value,
     check_value_in_range,
+    get_test_id_function,
     report_test_summary,
     reset_test_summary,
     set_logger,
+    set_test_id_function,
 )
 
 
@@ -37,10 +39,14 @@ class UvvmCheckTests(unittest.TestCase):
         logger.addHandler(self.handler)
         set_logger(logger)
         reset_test_summary()
+        # Always restore the default test_id function so tests are
+        # independent of whatever the previous test left installed.
+        set_test_id_function()
 
     def tearDown(self) -> None:
         logging.getLogger("hwval").removeHandler(self.handler)
         reset_test_summary()
+        set_test_id_function()
 
     # ---- check_value ----------------------------------------------------- #
 
@@ -236,6 +242,117 @@ class UvvmCheckTests(unittest.TestCase):
         self.assertEqual(rec.msg, "drift")
         self.assertIn("value=1", rec.detail)
         self.assertIn("expected=2", rec.detail)
+
+    # ---- test_id machinery --------------------------------------------- #
+
+    def test_default_test_id_is_sequential(self):
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a")
+        check_value(2, 2, alert_level=AlertLevel.WARNING, msg="b")
+        check_value(3, 3, alert_level=AlertLevel.WARNING, msg="c")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual([r.test_id for r in s.passed],
+                         ["TID_0001", "TID_0002", "TID_0003"])
+
+    def test_test_id_function_receives_record_and_seq(self):
+        seen: list[tuple] = []
+
+        def my_fn(record, seq):
+            seen.append((record.scope, record.msg_id, record.passed, seq))
+            return f"X_{seq}"
+
+        set_test_id_function(my_fn)
+        check_value(1, 1, alert_level=AlertLevel.WARNING,
+                    msg="a", scope="S", msg_id="M")
+        check_value(1, 2, alert_level=AlertLevel.WARNING,
+                    msg="b", scope="T", msg_id="N")
+        s = report_test_summary(file=io.StringIO())
+        # seq is 1-indexed and 0..2
+        self.assertEqual(
+            seen,
+            [("S", "M", True, 1), ("T", "N", False, 2)],
+        )
+        self.assertEqual([r.test_id for r in (s.passed + s.failed)],
+                         ["X_1", "X_2"])
+
+    def test_test_id_function_return_value_is_coerced_to_str(self):
+        set_test_id_function(lambda rec, seq: seq)  # returns int
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].test_id, "1")
+
+    def test_test_id_function_falls_back_on_exception(self):
+        def bad(record, seq):
+            raise RuntimeError("nope")
+
+        set_test_id_function(bad)
+        # The check should still be recorded; the function failure must
+        # not corrupt the WARNING accumulator.
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="still-works")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed_count, 1)
+        # Fallback default is the sequential function.
+        self.assertEqual(s.passed[0].test_id, "TID_0001")
+
+    def test_set_test_id_function_none_restores_default(self):
+        set_test_id_function(lambda r, s: "manual")
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="manual")
+        set_test_id_function()
+        # Re-stamping kicks in: the existing record's test_id is
+        # re-derived using the (now default) function, so 'manual' is
+        # replaced by the sequential default.
+        check_value(2, 2, alert_level=AlertLevel.WARNING, msg="default")
+        s = report_test_summary(file=io.StringIO())
+        # Re-stamped first record + freshly stamped second record.
+        self.assertEqual(
+            [r.test_id for r in (s.passed + s.failed)],
+            ["TID_0001", "TID_0002"],
+        )
+
+    def test_get_test_id_function_returns_callable(self):
+        fn = get_test_id_function()
+        self.assertTrue(callable(fn))
+        # Default behavior until overridden.
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="x")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].test_id, "TID_0001")
+
+    def test_reset_test_summary_resets_test_id_sequence(self):
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a")
+        check_value(2, 2, alert_level=AlertLevel.WARNING, msg="b")
+        s1 = report_test_summary(file=io.StringIO())
+        self.assertEqual(s1.passed[0].test_id, "TID_0001")
+        self.assertEqual(s1.passed[1].test_id, "TID_0002")
+
+        check_value(3, 3, alert_level=AlertLevel.WARNING, msg="c")
+        s2 = report_test_summary(file=io.StringIO())
+        # Sequence restarts at 1 after a reset (which report_test_summary
+        # performs by default).
+        self.assertEqual(s2.passed[0].test_id, "TID_0001")
+
+    def test_error_level_does_not_consume_test_id_seq(self):
+        # ERROR is not tracked, so its counter increment must be skipped
+        # to keep WARNING seqs contiguous.
+        with self.assertRaises(AssertionError):
+            check_value(1, 2, alert_level=AlertLevel.ERROR, msg="raise")
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="ok")
+        s = report_test_summary(file=io.StringIO())
+        self.assertEqual(s.passed[0].test_id, "TID_0001")
+
+    def test_checkrecord_test_id_defaults_to_empty(self):
+        # Backward-compat: existing code that builds a CheckRecord
+        # without test_id still works.
+        rec = CheckRecord(
+            scope="s", msg_id="i", msg="m",
+            passed=True, detail="d",
+        )
+        self.assertEqual(rec.test_id, "")
+
+    def test_checkrecord_accepts_test_id(self):
+        rec = CheckRecord(
+            scope="s", msg_id="i", msg="m",
+            passed=True, detail="d", test_id="TID_42",
+        )
+        self.assertEqual(rec.test_id, "TID_42")
 
 
 if __name__ == "__main__":

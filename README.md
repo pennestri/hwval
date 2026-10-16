@@ -88,7 +88,8 @@ attaching a capturing handler.
 
 Render two `.docx` test reports (one for *tests performed*, one for *test
 results*) from user-supplied Jinja2+docx templates. Requires the
-`hwval[docs]` extra (pulls in `docxtpl`).
+`hwval[docs]` extra (pulls in `docxtpl`, `python-docx`, `jinja2`,
+and `pyyaml` for the YAML config loader below).
 
 The class holds the two template paths plus the reporting options; the
 actual rendering is done by `SegDocument._generate(...)`.
@@ -97,11 +98,13 @@ actual rendering is done by `SegDocument._generate(...)`.
 | ------------------- | ----------------------------------- | ------------- | ------------------------------------------------------------- |
 | `test_template`     | `str` / `Path`                      | —             | Path to the *test performed* `.docx` template                 |
 | `results_template`  | `str` / `Path`                      | —             | Path to the *test results* `.docx` template                   |
-| `fields`            | `Sequence[str]`                     | all fields    | Subset of `CheckRecord` fields exposed to Jinja templates    |
+| `fields`            | `Sequence[str]`                     | `("test_id", "msg", "scope", "msg_id", "passed", "detail")` | Subset of `CheckRecord` fields exposed to Jinja templates |
 | `include_passed`    | `bool`                              | `True`        | Include passing records                                       |
 | `include_failed`    | `bool`                              | `True`        | Include failing records                                       |
 | `filter`            | `Callable[[CheckRecord], bool]`     | `None`        | Additional filter; runs after the include toggles             |
 | `extra_context`     | `Mapping[str, Any]`                 | `{}`          | Extra keys merged into the Jinja context                      |
+| `test_id_function`  | `callable` / `str` / `None`         | `None`        | Function used to derive `test_id` on every WARNING record    |
+| `config`            | `str` / `Path` / `None`             | `None`        | YAML file driving any of the above keys (see below)           |
 
 #### `SegDocument._generate(test_output, results_output, *, summary=None) -> Tuple[Path, Path]`
 
@@ -167,6 +170,7 @@ class CheckRecord:
     msg: str
     passed: bool
     detail: str
+    test_id: str = ""  # populated by the user-supplied test_id_function
 
 @dataclass
 class TestSummary:
@@ -174,6 +178,21 @@ class TestSummary:
     failed: List[CheckRecord]
     # properties: passed_count, failed_count, total, ok
 ```
+
+### `set_test_id_function(func=None)`, `get_test_id_function() -> callable`
+
+Install / inspect the function used to derive `test_id` on every
+WARNING-level `CheckRecord`. See [§10](#10-test_id-field--user-supplied-update-function).
+The default function (returned until you install your own) emits
+`"TID_<seq:04d>"`. Passing `None` restores the default.
+
+### `load_seg_config(path) -> dict`
+
+Load a `SegDocument` configuration from a YAML file. See
+[§11](#11-drive-the-segdocument-config-from-yaml). Raises
+`ImportError` if PyYAML is not installed, `FileNotFoundError` if the
+path is missing, `ValueError` on unknown keys, `TypeError` on
+wrong-typed values.
 
 ### Enums
 
@@ -434,6 +453,75 @@ Total: {{ summary.total }}  Passed: {{ summary.passed_count }}  Failed: {{ summa
 one paragraph per record. If you want table-style output, build a Word
 table in your template and use `{%tr ... %}` (column iteration) instead.
 
+### 10. `test_id` field + user-supplied update function
+
+Every WARNING-level `CheckRecord` carries a `test_id` string. The
+default is sequential (`TID_0001`, `TID_0002`, ...); the 1-indexed
+counter resets whenever `reset_test_summary()` or
+`report_test_summary(reset=True)` runs. Install your own function
+with `set_test_id_function(fn)` — it gets the record (with
+`test_id=""`) and the 1-indexed `seq`, and returns the new id:
+
+```python
+from hwval import set_test_id_function
+
+def make_test_id(record, seq):
+    return f"{record.scope}.{record.msg_id}.{seq:04d}"
+
+set_test_id_function(make_test_id)
+```
+
+After this every WARNING record — past, present, and future — has a
+test_id of the form `reg_walk.ID_REG0.0001`. The function is
+re-stamped onto existing records when you swap it, so the whole
+accumulator stays consistent with whichever function is currently
+active. A buggy function never breaks a check: the failure is caught,
+a DEBUG log line is emitted, and the default function takes over for
+that one record.
+
+### 11. Drive the `SegDocument` config from YAML
+
+`SegDocument` accepts a `config=` keyword that points at a YAML
+file. The YAML holds the same keys the constructor does
+(`fields`, `include_passed`, `include_failed`, `test_id_function`);
+explicit kwargs always win over the YAML, so the file is a
+convenience layer rather than a hard override. Unknown keys raise
+`ValueError` so typos surface immediately.
+
+`hwval.yml`:
+
+```yaml
+fields:
+  - test_id
+  - msg
+  - scope
+  - msg_id
+  - passed
+  - detail
+include_passed: true
+include_failed: true
+test_id_function: "my_pkg.test_id_helpers:make_test_id"
+```
+
+```python
+from hwval import SegDocument
+
+doc = SegDocument(
+    test_template="templates/test_performed.docx",
+    results_template="templates/test_results.docx",
+    config="hwval.yml",
+    extra_context={"project": "Acme DUT v3", "operator": "alice"},
+)
+```
+
+`test_id_function` follows the same `"package.module:attr"`
+convention as `logging.config.dictConfig` and `pickle`. It is
+resolved when `SegDocument` is constructed and installed globally
+via `set_test_id_function` so the same id ends up in the log lines
+emitted by `check_value` as well.
+
+Working example: [examples/08_test_id_and_yaml](examples/08_test_id_and_yaml).
+
 ---
 
 ## Severity reference
@@ -462,8 +550,8 @@ raise `NotImplementedError`. Port to cocotb if you need them.
 ## Development
 
 ```bash
-uv sync           # one-time venv + dev deps
-uv run pytest     # 42 tests
+uv sync --extra docs   # one-time venv + dev deps + docs extra
+uv run pytest     # 69 tests
 
 # Run the example scripts (one per feature)
 for d in examples/0?_*/; do uv run python "$d/example.py"; done

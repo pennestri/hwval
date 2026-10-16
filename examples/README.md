@@ -13,6 +13,7 @@ virtualenv where `hwval` is installed).
 | 05  | [05_logging](./05_logging)                          | Capture log records; replace the module logger via `set_logger`     |
 | 06  | [06_report_test_summary](./06_report_test_summary)  | `report_test_summary`, `reset_test_summary`, `TestSummary`          |
 | 07  | [07_seg_document](./07_seg_document)                | `SegDocument._generate` — two `.docx` reports from Jinja2 templates |
+| 08  | [08_test_id_and_yaml](./08_test_id_and_yaml)        | `test_id` field + user-supplied update fn + YML config for `SegDocument` |
 
 ## Run them all
 
@@ -25,8 +26,9 @@ done
 
 ## Install
 
-The base library is dependency-free. Example 07 needs the optional
-`docs` extra (`docxtpl` + `python-docx` + `jinja2`):
+The base library is dependency-free. Examples 07 and 08 need the
+optional `docs` extra (`docxtpl` + `python-docx` + `jinja2` +
+`pyyaml`):
 
 ```bash
 uv add hwval[docs]
@@ -39,3 +41,5 @@ uv add hwval[docs]
 3. **Then 06** to learn about the WARNING summary — the foundation for
    `SegDocument`.
 4. **Finish with 07** for the end-to-end docx report workflow.
+5. **Wrap up with 08** to see `test_id` plus the YAML-driven report
+   config.

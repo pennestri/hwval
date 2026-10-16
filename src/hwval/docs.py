@@ -17,7 +17,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple, Union
 
-from .checks import CheckRecord, TestSummary, current_summary
+from .checks import (
+    CheckRecord,
+    TestSummary,
+    TestIdFunction,
+    current_summary,
+    set_test_id_function,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -45,12 +51,23 @@ class _TemplateContext:
 
 
 # Default set of CheckRecord fields exposed to Jinja templates.
+# ``test_id`` is the user-supplied id of the test (filled in by
+# :func:`hwval.set_test_id_function`); it is included by default so
+# the rendered report carries the id without extra wiring.
 DEFAULT_FIELDS: tuple[str, ...] = (
+    "test_id",
     "msg",
     "scope",
     "msg_id",
     "passed",
     "detail",
+)
+
+
+# Recognized keys in a YML SegDocument config (see ``load_seg_config``).
+# Anything else is a hard error so typos don't get silently ignored.
+SEG_CONFIG_KEYS: frozenset[str] = frozenset(
+    {"fields", "include_passed", "include_failed", "test_id_function"}
 )
 
 
@@ -87,6 +104,180 @@ def _select(
 
 
 # --------------------------------------------------------------------------- #
+# YML config support                                                           #
+# --------------------------------------------------------------------------- #
+#
+# A user-supplied YAML file may drive the same knobs the SegDocument
+# constructor exposes (``fields``, ``include_passed``, ``include_failed``,
+# ``test_id_function``). This is convenient when a project wants to
+# adjust the report layout without touching Python code: edit the YAML,
+# re-run the test, the report layout updates.
+#
+# Example ``hwval.yml``::
+#
+#     fields:
+#       - test_id
+#       - msg
+#       - scope
+#       - msg_id
+#       - passed
+#       - detail
+#     include_passed: true
+#     include_failed: true
+#     test_id_function: "my_pkg.helpers:make_test_id"
+
+
+def _resolve_callable(dotted_path: str) -> Callable[..., Any]:
+    """Resolve ``"package.module:attr"`` to a live Python object.
+
+    The format mirrors the one used by ``logging.config.dictConfig`` and
+    ``pickle`` so anyone already familiar with those tools is at home.
+    """
+    if not isinstance(dotted_path, str) or ":" not in dotted_path:
+        raise ValueError(
+            f"callable path must be in 'package.module:attr' form, "
+            f"got {dotted_path!r}"
+        )
+    module_path, _, attr = dotted_path.partition(":")
+    if not module_path or not attr:
+        raise ValueError(
+            f"callable path must be in 'package.module:attr' form, "
+            f"got {dotted_path!r}"
+        )
+    import importlib
+
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as e:
+        raise ImportError(
+            f"cannot import module {module_path!r} for test_id_function"
+        ) from e
+    try:
+        fn = getattr(module, attr)
+    except AttributeError as e:
+        raise AttributeError(
+            f"module {module_path!r} has no attribute {attr!r}"
+        ) from e
+    if not callable(fn):
+        raise TypeError(
+            f"dotted path {dotted_path!r} resolved to "
+            f"{type(fn).__name__}, not a callable"
+        )
+    return fn
+
+
+def load_seg_config(path: Union[str, Path]) -> dict[str, Any]:
+    """Load a SegDocument configuration from a YAML file.
+
+    The file is expected to map onto the same keys the
+    :class:`SegDocument` constructor accepts:
+
+    * ``fields`` (list[str]) — names of :class:`CheckRecord` fields to
+      expose to the templates.
+    * ``include_passed`` (bool) — default ``True``.
+    * ``include_failed`` (bool) — default ``True``.
+    * ``test_id_function`` (str) — a ``"package.module:attr"`` reference
+      to a function with signature ``(record, sequence) -> str``. It is
+      installed globally via :func:`hwval.set_test_id_function` so the
+      same id ends up in logs and reports.
+
+    Any unknown key raises :class:`ValueError` so typos surface early
+    instead of being silently ignored.
+
+    Requires PyYAML; raise a clear :class:`ImportError` if it isn't
+    installed. PyYAML is *not* a hard dependency of ``hwval`` because
+    the YAML loader only matters if you opt in via ``config=`` /
+    :func:`load_seg_config`.
+
+    Parameters
+    ----------
+    path:
+        Path to a YAML file. ``"-"`` and :class:`io.StringIO` are not
+        accepted; pass a real path so error messages stay useful.
+
+    Returns
+    -------
+    dict
+        A validated config dict ready to merge into SegDocument kwargs.
+    """
+    try:
+        import yaml  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise ImportError(
+            "SegDocument YAML config requires PyYAML. "
+            "Install with `pip install pyyaml` or `uv add pyyaml`."
+        ) from e
+
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"SegDocument config not found: {p}")
+
+    with p.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    if cfg is None:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        raise TypeError(
+            f"SegDocument YAML root must be a mapping, "
+            f"got {type(cfg).__name__}"
+        )
+
+    unknown = set(cfg) - SEG_CONFIG_KEYS
+    if unknown:
+        raise ValueError(
+            f"unknown SegDocument config key(s) in {p}: "
+            f"{sorted(unknown)}; valid keys: {sorted(SEG_CONFIG_KEYS)}"
+        )
+
+    if "fields" in cfg:
+        flds = cfg["fields"]
+        if not isinstance(flds, list) or not all(
+            isinstance(x, str) for x in flds
+        ):
+            raise TypeError(
+                f"`fields` in {p} must be a list[str], got "
+                f"{type(flds).__name__}"
+            )
+    for key in ("include_passed", "include_failed"):
+        if key in cfg and not isinstance(cfg[key], bool):
+            raise TypeError(
+                f"`{key}` in {p} must be a bool, got "
+                f"{type(cfg[key]).__name__}"
+            )
+    if "test_id_function" in cfg and not isinstance(
+        cfg["test_id_function"], str
+    ):
+        raise TypeError(
+            f"`test_id_function` in {p} must be a string "
+            f"('package.module:attr'), got "
+            f"{type(cfg['test_id_function']).__name__}"
+        )
+    return cfg
+
+
+def _normalize_test_id_function(
+    func: Union[None, str, TestIdFunction, Callable[..., Any]],
+) -> Optional[TestIdFunction]:
+    """Coerce a ``test_id_function`` kwarg to a real callable (or ``None``).
+
+    Accepts a callable (used as-is), a ``"package.module:attr"`` string
+    (resolved via :func:`_resolve_callable`), or ``None`` (meaning
+    "do not install a function; keep the current default").
+    """
+    if func is None:
+        return None
+    if isinstance(func, str):
+        return _resolve_callable(func)
+    if callable(func):
+        return func
+    raise TypeError(
+        f"test_id_function must be a callable, a 'module:attr' string, "
+        f"or None; got {type(func).__name__}"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # SegDocument                                                                  #
 # --------------------------------------------------------------------------- #
 
@@ -117,9 +308,9 @@ class SegDocument:
         Path to the ``test results`` ``.docx`` template.
     fields:
         Subset of :class:`CheckRecord` field names to expose to the
-        templates. Default: ``("msg", "scope", "msg_id", "passed",
-        "detail")``. Anything not listed is not visible inside the
-        template.
+        templates. Default: ``("test_id", "msg", "scope", "msg_id",
+        "passed", "detail")``. Anything not listed is not visible
+        inside the template.
     include_passed:
         When ``False``, passing records are excluded from both rendered
         documents.
@@ -134,11 +325,38 @@ class SegDocument:
     extra_context:
         Extra keys merged into the Jinja context. Use for project name,
         device under test, operator, etc.
+    test_id_function:
+        User-supplied function used to derive the ``test_id`` of every
+        WARNING-level :class:`CheckRecord`. Signature is
+        ``(record, sequence) -> str``. May be a callable (used as-is)
+        or a ``"package.module:attr"`` string (resolved on
+        construction). When supplied it is installed globally via
+        :func:`hwval.set_test_id_function` so the same id ends up in
+        both the rendered report and any captured log records. Pass
+        ``None`` (the default) to leave the current function in place
+        (built-in sequential ``"TID_<seq:04d>"`` unless already
+        overridden).
+    config:
+        Path to a YAML file driving any of ``fields``,
+        ``include_passed``, ``include_failed``, ``test_id_function``.
+        Loaded via :func:`load_seg_config`. Convenient for keeping the
+        report layout out of Python source — edit the YAML, re-run the
+        test, the report updates. Explicit kwargs always win over the
+        YAML (the YAML only fills in keys that were left at their
+        defaults). Requires PyYAML; raises a clear ``ImportError``
+        otherwise.
 
     Raises
     ------
     ImportError
         If the optional :code:`hwval[docs]` extra is not installed.
+    ImportError
+        If ``config`` is supplied but PyYAML is not installed.
+    FileNotFoundError
+        If ``config`` is supplied and the file does not exist.
+    ValueError
+        If the YAML config contains unknown keys, or
+        ``test_id_function`` does not parse to a callable.
 
     Examples
     --------
@@ -165,6 +383,8 @@ class SegDocument:
         include_failed: bool = True,
         filter: Optional[Callable[[CheckRecord], bool]] = None,
         extra_context: Optional[Mapping[str, Any]] = None,
+        test_id_function: Union[None, str, TestIdFunction, Callable[..., Any]] = None,
+        config: Union[None, str, Path] = None,
     ) -> None:
         # Lazy import: keep the base library dependency-free.
         try:
@@ -175,6 +395,29 @@ class SegDocument:
                 "install with `pip install hwval[docs]` "
                 "(provides docxtpl, python-docx, jinja2)."
             ) from e
+
+        # ----- 1. Layer the YAML config under the explicit kwargs -----
+        # The YAML only fills in keys the user did not already set
+        # explicitly. This way the constructor signature is the
+        # source of truth and the YAML is a convenience layer.
+        if config is not None:
+            cfg = load_seg_config(config)
+            if fields is None and "fields" in cfg:
+                fields = list(cfg["fields"])
+            if "include_passed" in cfg:
+                include_passed = cfg["include_passed"]
+            if "include_failed" in cfg:
+                include_failed = cfg["include_failed"]
+            if test_id_function is None and "test_id_function" in cfg:
+                test_id_function = cfg["test_id_function"]
+
+        # ----- 2. Resolve test_id_function and install globally -----
+        # A user-supplied function is global (set in checks.py module
+        # state) so the same id ends up in the report, the log lines
+        # emitted by check_value, and report_test_summary output.
+        resolved_tid_fn = _normalize_test_id_function(test_id_function)
+        if resolved_tid_fn is not None:
+            set_test_id_function(resolved_tid_fn)
 
         self.test_template = Path(test_template)
         self.results_template = Path(results_template)
@@ -188,6 +431,9 @@ class SegDocument:
         self.extra_context: dict[str, Any] = (
             dict(extra_context) if extra_context else {}
         )
+        # Keep the resolved callable around so callers can introspect
+        # or override later via get_test_id_function.
+        self.test_id_function: Optional[TestIdFunction] = resolved_tid_fn
 
     # ------------------------------------------------------------------ #
     # Internal                                                            #

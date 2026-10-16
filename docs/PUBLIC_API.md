@@ -59,6 +59,27 @@ Replace the module logger. Default is `logging.getLogger("hwval")`.
 Useful for tests or for routing logs into a host application's logger
 hierarchy.
 
+### `set_test_id_function` / `get_test_id_function`
+
+```python
+TestIdFunction = Callable[[CheckRecord, int], str]
+
+def set_test_id_function(
+    func: Optional[TestIdFunction] = None,
+) -> None: ...
+
+def get_test_id_function() -> TestIdFunction: ...
+```
+
+Install (or clear) the function used to derive `test_id` on every
+WARNING-level `CheckRecord`. The function receives the record (with
+`test_id == ""`) and a 1-indexed sequence number, and returns the
+new id string. When the function is *changed*, every record already
+in the accumulator is re-stamped with the new function (each
+record keeps its 1-indexed position). Passing `None` to
+`set_test_id_function` restores the default
+`"TID_<seq:04d>"` function.
+
 ### `report_test_summary`
 
 ```python
@@ -142,7 +163,11 @@ class CheckRecord:
     msg: str
     passed: bool
     detail: str
+    test_id: str = ""
 ```
+
+`test_id` is filled in by the active test_id function (see
+`set_test_id_function` above).
 
 ### `class TestSummary`
 
@@ -170,11 +195,13 @@ plain dicts projected onto the user-configured `fields`; counts and
 ```python
 class SegDocument(
     test_template, results_template, *,
-    fields=("msg", "scope", "msg_id", "passed", "detail"),
+    fields=("test_id", "msg", "scope", "msg_id", "passed", "detail"),
     include_passed=True,
     include_failed=True,
     filter=None,
     extra_context=None,
+    test_id_function=None,    # callable or "package.module:attr" string
+    config=None,              # path to a YAML config file
 ):
     def _generate(
         test_output, results_output, *,
@@ -185,6 +212,13 @@ class SegDocument(
 Binds two `.docx` templates plus reporting options. Templates are
 ordinary Word documents containing Jinja placeholders, processed via
 [`docxtpl`](https://docxtpl.readthedocs.io/).
+
+When `test_id_function` is supplied it is installed globally via
+`set_test_id_function` so the same id ends up in logs and reports.
+When `config=` points at a YAML file the listed keys
+(`fields`, `include_passed`, `include_failed`, `test_id_function`)
+fill in any kwargs the caller left at their default; explicit
+kwargs always win over the YAML.
 
 Jinja context available to both templates:
 
@@ -204,6 +238,27 @@ Jinja context available to both templates:
 `current_summary()` to peek.
 
 Raises `ImportError` on construction if `docxtpl` isn't installed.
+
+### `load_seg_config` *(optional `hwval[docs]`)*
+
+```python
+def load_seg_config(path: Union[str, Path]) -> dict: ...
+```
+
+Load a `SegDocument` configuration from a YAML file. Validated keys:
+
+| Key                | Type        | Default | Notes                                                |
+| ------------------ | ----------- | ------- | ---------------------------------------------------- |
+| `fields`           | list[str]   | (defaults) | `CheckRecord` field names exposed to templates    |
+| `include_passed`   | bool        | `True`  | Include passing records in the report                |
+| `include_failed`   | bool        | `True`  | Include failing records in the report                |
+| `test_id_function` | str         | —       | `"package.module:attr"` reference to a `(record, seq) -> str` function |
+
+Unknown keys raise `ValueError`. Wrong-typed values raise
+`TypeError`. Requires PyYAML; raises `ImportError` otherwise. The
+YAML only fills in keys the caller did not already pass to
+`SegDocument` explicitly, so the constructor signature is the
+source of truth and the YAML is a convenience layer.
 
 ## Stubs (raise `NotImplementedError`)
 

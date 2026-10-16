@@ -15,9 +15,11 @@ from .checks import (
     check_value,
     check_value_in_range,
     current_summary,
+    get_test_id_function,
     report_test_summary,
     reset_test_summary,
     set_logger,
+    set_test_id_function,
 )
 
 __all__ = [
@@ -30,9 +32,11 @@ __all__ = [
     "check_value",
     "check_value_in_range",
     "current_summary",
+    "get_test_id_function",
     "report_test_summary",
     "reset_test_summary",
     "set_logger",
+    "set_test_id_function",
 ]
 
 # `SegDocument` lives in the optional `hwval.docs` submodule; importing

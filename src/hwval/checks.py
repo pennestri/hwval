@@ -10,11 +10,12 @@ Behaviour:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, List, Optional, Sequence, TextIO
+from typing import Any, Callable, List, Optional, Sequence, TextIO
 
 
 # --------------------------------------------------------------------------- #
@@ -94,16 +95,116 @@ _TRACKED_LEVELS: frozenset[AlertLevel] = frozenset(
 
 @dataclass(frozen=True)
 class CheckRecord:
-    """A single WARNING-level check outcome, recorded for `report_test_summary`."""
+    """A single WARNING-level check outcome, recorded for `report_test_summary`.
+
+    `test_id` is derived at accumulation time by the user-supplied
+    :data:`test_id_function` (or, by default, a sequential
+    ``"TID_<seq>"``). The function receives the record (with
+    ``test_id == ""``) and a 1-indexed sequence number; whatever it
+    returns is stored as the record's ``test_id``. Reset
+    :func:`reset_test_summary` also resets that sequence.
+    """
 
     scope: str
     msg_id: str
     msg: str
     passed: bool
     detail: str
+    test_id: str = ""
 
 
 _summary_records: List[CheckRecord] = []
+
+
+# --------------------------------------------------------------------------- #
+# test_id function                                                            #
+# --------------------------------------------------------------------------- #
+#
+# A user-supplied callable ``(record: CheckRecord, seq: int) -> str`` that
+# fills in each WARNING-level ``CheckRecord.test_id``. The sequence counter
+# starts at 1 on every :func:`reset_test_summary` call (or on process
+# start) and is global so records keep a stable id across many checks
+# inside one test run. The default function emits a sequential
+# ``"TID_<seq:04d>"`` id; install your own with
+# :func:`set_test_id_function`.
+
+
+TestIdFunction = Callable[[CheckRecord, int], str]
+
+
+def _default_test_id(record: CheckRecord, seq: int) -> str:
+    """Sequential default: ``"TID_0001"``, ``"TID_0002"``, ..."""
+    return f"TID_{seq:04d}"
+
+
+_test_id_function: TestIdFunction = _default_test_id
+_test_id_counter: int = 0
+
+
+def set_test_id_function(
+    func: Optional[TestIdFunction] = None,
+) -> None:
+    """Install the function used to derive ``test_id`` on every WARNING record.
+
+    The function signature is ``(record, sequence) -> str`` where
+    ``record`` is a :class:`CheckRecord` with ``test_id == ""`` (the
+    field you are computing) and ``sequence`` is a 1-indexed counter
+    that resets whenever :func:`reset_test_summary` is called.
+
+    Passing ``None`` (the default) restores the built-in sequential
+    function :data:`DEFAULT_TEST_ID_FUNCTION`.
+
+    When the function is *changed* (i.e. a different callable is
+    installed), every record already in the accumulator is re-stamped
+    with the new function. Each record keeps its 1-indexed sequence
+    position; only the ``test_id`` string is recomputed. This keeps
+    the accumulator consistent with whichever function is currently
+    active, so a report rendered immediately after
+    ``set_test_id_function`` reflects the new id scheme. If a record's
+    re-stamp raises, that record falls back to the default function
+    and a DEBUG log line is emitted.
+
+    Examples
+    --------
+    >>> from hwval import set_test_id_function
+    >>> def by_scope_and_msg(record, seq):
+    ...     return f"{record.scope}.{record.msg_id}.{seq:04d}"
+    >>> set_test_id_function(by_scope_and_msg)
+    """
+    global _test_id_function
+    new_fn = func if func is not None else _default_test_id
+    if new_fn is _test_id_function:
+        return
+    # Re-apply to existing records so the whole accumulator reflects
+    # the new function. Each record keeps its 1-indexed position.
+    for i, rec in enumerate(_summary_records):
+        seq = i + 1
+        try:
+            new_tid = str(new_fn(rec, seq))
+        except Exception as e:  # pragma: no cover - defensive
+            _logger.debug(
+                "test_id_function raised %r while re-stamping; "
+                "using default",
+                e,
+            )
+            new_tid = _default_test_id(rec, seq)
+        _summary_records[i] = dataclasses.replace(rec, test_id=new_tid)
+    _test_id_function = new_fn
+
+
+def get_test_id_function() -> TestIdFunction:
+    """Return the currently installed test_id function.
+
+    Always returns a callable (defaults to :data:`DEFAULT_TEST_ID_FUNCTION`
+    when no user function has been installed).
+    """
+    return _test_id_function
+
+
+def _next_test_id_seq() -> int:
+    global _test_id_counter
+    _test_id_counter += 1
+    return _test_id_counter
 
 
 @dataclass
@@ -188,15 +289,27 @@ def _emit(
     _logger.log(level, "%s%s", head, detail)
 
     if alert_level in _TRACKED_LEVELS:
-        _summary_records.append(
-            CheckRecord(
-                scope=scope,
-                msg_id=msg_id,
-                msg=msg,
-                passed=passed,
-                detail=detail,
-            )
+        rec = CheckRecord(
+            scope=scope,
+            msg_id=msg_id,
+            msg=msg,
+            passed=passed,
+            detail=detail,
         )
+        # Apply the user-supplied test_id function (or the default).
+        # The function may rely on any of the record's fields plus the
+        # 1-indexed sequence counter, which resets on reset_test_summary.
+        seq = _next_test_id_seq()
+        try:
+            test_id = _test_id_function(rec, seq)
+        except Exception as e:  # pragma: no cover - defensive
+            # A buggy test_id function must never corrupt a check;
+            # fall back to the default so the report still has an id.
+            # Reuse the seq we already allocated (don't burn another).
+            _logger.debug("test_id_function raised %r; using default", e)
+            test_id = _default_test_id(rec, seq)
+        rec = dataclasses.replace(rec, test_id=str(test_id))
+        _summary_records.append(rec)
 
     if not passed and alert_level in _RAISING_LEVELS:
         raise AssertionError(f"{head}{detail}")
@@ -208,8 +321,16 @@ def _emit(
 
 
 def reset_test_summary() -> None:
-    """Clear the WARNING-test summary accumulator."""
+    """Clear the WARNING-test summary accumulator.
+
+    Also resets the test_id sequence counter used by the default
+    :data:`DEFAULT_TEST_ID_FUNCTION` and any user-supplied function
+    installed via :func:`set_test_id_function`. The next WARNING
+    check after a reset is sequence 1.
+    """
+    global _test_id_counter
     _summary_records.clear()
+    _test_id_counter = 0
 
 
 def current_summary() -> TestSummary:
@@ -284,7 +405,9 @@ def report_test_summary(
     summary = TestSummary(passed=passed, failed=failed)
 
     if reset:
+        global _test_id_counter
         _summary_records.clear()
+        _test_id_counter = 0
 
     if fail_on_failed and failed:
         raise AssertionError(

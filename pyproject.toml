@@ -26,8 +26,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# Pulls in python-docx + jinja2 + docxtpl for SegDocument._generate().
-docs = ["docxtpl>=0.18"]
+# Pulls in python-docx + jinja2 + docxtpl for SegDocument._generate(),
+# plus PyYAML for the YAML config loader (SegDocument(config=...)).
+docs = ["docxtpl>=0.18", "pyyaml>=6.0"]
 
 [project.urls]
 Homepage = "https://uvvm.github.io/"
@@ -55,6 +56,7 @@ include = [
 dev = [
     "pytest>=8.0",
     "docxtpl>=0.18",
+    "pyyaml>=6.0",
 ]
 
 # ---------------------------------------------------------------------------

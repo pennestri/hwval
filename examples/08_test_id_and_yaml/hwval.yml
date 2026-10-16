@@ -1,0 +1,22 @@
+# SegDocument config for example 08.
+#
+# Any key here is filled into the SegDocument constructor unless the
+# caller passes an explicit kwarg (in which case the kwarg wins).
+# Unknown keys are a hard error so typos surface immediately.
+
+fields:
+  - test_id
+  - msg
+  - scope
+  - msg_id
+  - passed
+  - detail
+
+include_passed: true
+include_failed: true
+
+# "package.module:attr" reference, same convention as
+# logging.config.dictConfig and pickle. Resolved on SegDocument
+# construction; installed globally via set_test_id_function so the
+# same id ends up in the log lines emitted by check_value as well.
+test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
