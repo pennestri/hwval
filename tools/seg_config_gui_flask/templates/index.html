@@ -120,29 +120,100 @@
   </div>
 
   <div class="card">
-    <h2><span class="step">3.</span>Generate</h2>
+    <h2><span class="step">3.</span>Extra context</h2>
+    <p class="hint">
+      Extra context keys become variables in the report templates
+      (<code>{% raw %}{{ project }}{% endraw %}</code>) and are merged
+      into the Jinja context by
+      <code>SegDocument(extra_context=…)</code>. Every key
+      shows up as a placeholder in the downloaded <code>.docx</code>
+      templates. Keys must be valid Python identifiers and must not
+      shadow a built-in template variable
+      (<code>summary</code>, <code>records</code>,
+      <code>fields</code>, …).
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Value</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="ctx-tbody">
+        {% for c in extra_context %}
+          <tr>
+            <td>
+              <input type="text" name="ctx_key"
+                     value="{{ c.key }}" placeholder="project">
+            </td>
+            <td>
+              <input type="text" name="ctx_value"
+                     value="{{ c.value }}" placeholder="Acme DUT v3">
+            </td>
+            <td class="actions-cell">
+              <button type="button" class="small danger" data-action="del-ctx">
+                Delete
+              </button>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="add-row">
+      <button type="button" class="primary" id="add-ctx">
+        + Add Context Key
+      </button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">4.</span>Generate</h2>
     <div class="actions">
       <button type="submit" class="primary">Generate YML</button>
-      {# The download button is its own <form> so it can POST
+      {# The download buttons are their own <form> so they can POST
          independently. We submit the same field/settings state
          by cloning the current form. JS hooks handle that. #}
       <button type="button" id="download-btn"
               {% if not result or result.errors %}disabled{% endif %}>
         Download hwval.yml
       </button>
+      <button type="button" id="download-tpl-performed"
+              {% if not result or result.errors %}disabled{% endif %}>
+        Download test_performed.docx
+      </button>
+      <button type="button" id="download-tpl-results"
+              {% if not result or result.errors %}disabled{% endif %}>
+        Download test_results.docx
+      </button>
     </div>
+    <p class="hint" style="margin-top: 10px; margin-bottom: 0;">
+      The two <code>.docx</code> files are the starter templates for
+      <code>SegDocument(test_template=…, results_template=…)</code>.
+      Each one holds the fields you declared (scoped to that report)
+      as table columns, plus a placeholder for every extra-context
+      key. Open them in Word, adjust the layout and keep the
+      <code>{% raw %}{{ … }}{% endraw %}</code> placeholders and the
+      <code>{% raw %}{%tr … %}{% endraw %}</code> row tags.
+    </p>
   </div>
 </form>
 
-{# The standalone download form: posts to /download and lets the
-   browser save the response. Filled in by JS when the user
-   clicks Download. #}
+{# The standalone download forms: they post to /download and
+   /download-template/<report> so the browser saves the response.
+   Filled in by JS when the user clicks a download button. #}
 <form method="post" action="{{ url_for('download') }}" id="download-form"
       style="display: none;"></form>
+<form method="post"
+      action="{{ url_for('download_template', report='test_performed') }}"
+      id="download-tpl-performed-form" style="display: none;"></form>
+<form method="post"
+      action="{{ url_for('download_template', report='test_results') }}"
+      id="download-tpl-results-form" style="display: none;"></form>
 
 {% if result and not result.errors %}
   <div class="card">
-    <h2><span class="step">4.</span>Generated YML</h2>
+    <h2><span class="step">5.</span>Generated YML</h2>
     <pre class="code">{{ result.yaml }}</pre>
     <details>
       <summary>Show the equivalent Python kwargs</summary>
@@ -250,15 +321,46 @@ document.getElementById("insert-preset").addEventListener("click", () => {
   sel.value = "";
 });
 
-// --- Download: clone the main form's fields into the download form ------
-// The download endpoint lives at /download (different from /) so the
-// browser gets a Content-Disposition response. We rebuild a hidden
-// form with the same field_name / field_reports / settings inputs
-// and submit it.
+// --- Extra-context row management ----------------------------------------
+const ctxTbody = document.getElementById("ctx-tbody");
 
-function cloneIntoDownloadForm() {
+function makeCtxRow(key, value) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input type="text" name="ctx_key" placeholder="project"></td>
+    <td><input type="text" name="ctx_value" placeholder="Acme DUT v3"></td>
+    <td class="actions-cell">
+      <button type="button" class="small danger" data-action="del-ctx">Delete</button>
+    </td>
+  `;
+  tr.querySelector('input[name="ctx_key"]').value = key;
+  tr.querySelector('input[name="ctx_value"]').value = value;
+  tr.querySelector('[data-action="del-ctx"]').addEventListener("click", () => {
+    tr.remove();
+  });
+  return tr;
+}
+
+if (ctxTbody) {
+  ctxTbody.querySelectorAll("tr").forEach(tr => {
+    tr.querySelector('[data-action="del-ctx"]')
+      .addEventListener("click", () => tr.remove());
+  });
+}
+
+document.getElementById("add-ctx").addEventListener("click", () => {
+  ctxTbody.appendChild(makeCtxRow("", ""));
+});
+
+// --- Download: clone the main form's fields into the download form ------
+// The download endpoints live at /download and /download-template/<report>
+// (different from /) so the browser gets a Content-Disposition response.
+// We rebuild a hidden form with the same field_name / field_reports /
+// settings / ctx inputs and submit it.
+
+function cloneIntoDownloadForm(formId) {
   const main = document.getElementById("main-form");
-  const dl = document.getElementById("download-form");
+  const dl = document.getElementById(formId);
   dl.innerHTML = "";
   Array.from(main.elements).forEach(el => {
     if (!el.name) return;
@@ -278,12 +380,18 @@ function cloneIntoDownloadForm() {
   return dl;
 }
 
-const dlBtn = document.getElementById("download-btn");
-if (dlBtn) {
-  dlBtn.addEventListener("click", () => {
-    cloneIntoDownloadForm().submit();
-  });
+function wireDownload(buttonId, formId) {
+  const btn = document.getElementById(buttonId);
+  if (btn) {
+    btn.addEventListener("click", () => {
+      cloneIntoDownloadForm(formId).submit();
+    });
+  }
 }
+
+wireDownload("download-btn", "download-form");
+wireDownload("download-tpl-performed", "download-tpl-performed-form");
+wireDownload("download-tpl-results", "download-tpl-results-form");
 </script>
 
 {% endblock %}

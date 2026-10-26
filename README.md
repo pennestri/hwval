@@ -622,6 +622,22 @@ shape. The Flask GUI also exposes a *Download hwval.yml* button
 that posts the same form state to `/download` and saves the
 response as a file. See the per-tool READMEs.
 
+The Flask GUI additionally
+
+* takes an `extra_context` mapping (key/value pairs, validated as
+  Python identifiers) that is merged into the Jinja context by
+  `SegDocument(extra_context=...)` — it is shown in the Python-kwargs
+  preview rather than in the YML, because `load_seg_config` only
+  accepts `fields`, `include_passed`, `include_failed` and
+  `test_id_function`;
+* generates the two starter `.docx` templates
+  (`test_performed.docx` + `test_results.docx`) that
+  `SegDocument` consumes, pre-filled with the fields you declared
+  (scoped to that report) and a `{{ <key> }}` placeholder for every
+  extra-context key. Download them with the *Download
+  test_performed.docx* / *Download test_results.docx* buttons, open
+  them in Word and adjust the layout.
+
 ---
 
 ## Severity reference
