@@ -273,6 +273,88 @@ class FlaskGuiTests(unittest.TestCase):
         self.assertTrue(cfg["include_failed"])
         self.assertEqual(cfg["test_id_function"], "pkg.mod:fn")
 
+    # ---- preset fields are locked ------------------------------------ #
+
+    def _field_rows(self, body):
+        """(name, is_readonly, badge_hidden) for every rendered field row."""
+        import re
+
+        rows = []
+        for m in re.finditer(
+            r'<input type="text" name="field_name"(.*?)>\s*'
+            r'<span class="badge neutral field-lock"(.*?)>',
+            body,
+            re.S,
+        ):
+            name = re.search(r'value="([^"]*)"', m.group(1))
+            rows.append((
+                name.group(1) if name else "",
+                "readonly" in m.group(1),
+                "hidden" in m.group(2),
+            ))
+        return rows
+
+    def test_preset_field_names_are_readonly(self):
+        r = self.client.get("/")
+        rows = dict(
+            (n, (ro, hid)) for n, ro, hid in self._field_rows(
+                r.get_data(as_text=True)
+            )
+        )
+        # Every pre-filled field is a preset name -> locked.
+        for name in ("test_id", "msg_id", "msg", "detail", "value",
+                     "expected", "passed", "operator"):
+            self.assertIn(name, rows)
+            self.assertTrue(rows[name][0], f"{name} should be readonly")
+            self.assertFalse(rows[name][1], f"{name} badge should show")
+
+    def test_custom_field_names_stay_editable(self):
+        r = self.client.post("/", data={
+            "field_name": ["test_id", "my_custom_field"],
+            "field_reports": ["all", "all"],
+            "include_passed": "on",
+            "include_failed": "on",
+        })
+        rows = dict(
+            (n, (ro, hid)) for n, ro, hid in self._field_rows(
+                r.get_data(as_text=True)
+            )
+        )
+        self.assertTrue(rows["test_id"][0])
+        self.assertFalse(rows["my_custom_field"][0])
+        # The badge is hidden for the custom one.
+        self.assertTrue(rows["my_custom_field"][1])
+
+    def test_locked_field_still_reaches_the_yml(self):
+        # readonly inputs are still submitted (unlike disabled ones) —
+        # the field must not silently disappear from the YML.
+        r = self.client.post("/", data={
+            "field_name": ["test_id", "operator"],
+            "field_reports": ["all", "all"],
+            "include_passed": "on",
+            "include_failed": "on",
+        })
+        self.assertEqual(r.status_code, 200)
+        body = r.get_data(as_text=True)
+        self.assertIn("YML is valid", body)
+        yml = body.split('<pre class="code">')[1].split("</pre>")[0]
+        self.assertIn("- test_id", yml)
+        self.assertIn("- operator", yml)
+
+    def test_preset_names_are_exported_for_the_browser(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        self.assertIn("const PRESET_FIELDS = new Set(", body)
+        for name in ("test_id", "scope", "operator", "seq_id"):
+            self.assertIn(f'"{name}"', body)
+
+    def test_preset_fields_are_not_disabled(self):
+        # A disabled input is NOT submitted — that would drop the field
+        # from the YML. readonly is the right control here.
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        self.assertNotIn("disabled", body.split('name="field_name"')[1][:400])
+
     # ---- field reference -------------------------------------------- #
 
     def test_field_reference_table_is_rendered(self):

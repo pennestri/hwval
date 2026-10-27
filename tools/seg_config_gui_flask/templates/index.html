@@ -79,8 +79,20 @@
           <tr draggable="true" data-i="{{ loop.index0 }}">
             <td class="handle" title="Drag to reorder">⋮⋮</td>
             <td>
-              <input type="text" name="field_name"
-                     value="{{ f.name }}" placeholder="field_name">
+              <div class="field-input">
+                <input type="text" name="field_name"
+                       value="{{ f.name }}" placeholder="field_name"
+                       {% if f.name in preset_fields %}
+                       readonly
+                       title="Preset field — the name is fixed. The value
+                              is read by name, so renaming it would leave
+                              the column empty."
+                       {% endif %}>
+                <span class="badge neutral field-lock"
+                      {% if f.name not in preset_fields %}hidden{% endif %}>
+                  preset
+                </span>
+              </div>
               <span class="field-hint">{{ field_hints.get(f.name, "") }}</span>
             </td>
             <td>
@@ -311,12 +323,32 @@ const tbody = document.getElementById("fields-tbody");
 // Short explanation per known field, injected by the server.
 const FIELD_HINTS = {{ field_hints | tojson }};
 
+// The preset field names, injected by the server. A field carrying one
+// of these names is fixed: the value is read by name, so renaming it
+// would leave the column empty.
+const PRESET_FIELDS = new Set({{ preset_fields | list | tojson }});
+
+const PRESET_LOCK_TITLE =
+  "Preset field — the name is fixed. The value is read by name, so " +
+  "renaming it would leave the column empty.";
+
 // Show the one-liner under a field name while the user types.
 function updateFieldHint(tr) {
   const input = tr.querySelector('input[name="field_name"]');
   const hint = tr.querySelector('.field-hint');
   if (!input || !hint) return;
   hint.textContent = FIELD_HINTS[input.value.trim()] || "";
+}
+
+// Lock the name of a preset field, unlock a custom one.
+function syncFieldLock(tr) {
+  const input = tr.querySelector('input[name="field_name"]');
+  if (!input) return;
+  const isPreset = PRESET_FIELDS.has(input.value.trim());
+  input.readOnly = isPreset;
+  input.title = isPreset ? PRESET_LOCK_TITLE : "";
+  const badge = tr.querySelector('.field-lock');
+  if (badge) badge.hidden = !isPreset;
 }
 
 function nextFreshName() {
@@ -337,7 +369,10 @@ function makeRow(name, reports) {
   tr.innerHTML = `
     <td class="handle" title="Drag to reorder">⋮⋮</td>
     <td>
-      <input type="text" name="field_name" placeholder="field_name">
+      <div class="field-input">
+        <input type="text" name="field_name" placeholder="field_name">
+        <span class="badge neutral field-lock" hidden>preset</span>
+      </div>
       <span class="field-hint"></span>
     </td>
     <td>
@@ -357,6 +392,7 @@ function makeRow(name, reports) {
   if (opt) opt.selected = true;
   attachRowEvents(tr);
   updateFieldHint(tr);
+  syncFieldLock(tr);
   return tr;
 }
 
@@ -365,7 +401,10 @@ function attachRowEvents(tr) {
     tr.remove();
   });
   tr.querySelector('input[name="field_name"]')
-    .addEventListener("input", () => updateFieldHint(tr));
+    .addEventListener("input", () => {
+      updateFieldHint(tr);
+      syncFieldLock(tr);
+    });
   tr.addEventListener("dragstart", e => {
     e.dataTransfer.setData("text/plain", "");
     tr.classList.add("dragging");
@@ -393,7 +432,10 @@ function attachRowEvents(tr) {
 }
 
 tbody.querySelectorAll("tr").forEach(attachRowEvents);
-tbody.querySelectorAll("tr").forEach(updateFieldHint);
+tbody.querySelectorAll("tr").forEach(tr => {
+  updateFieldHint(tr);
+  syncFieldLock(tr);
+});
 
 document.getElementById("add-field").addEventListener("click", () => {
   tbody.appendChild(makeRow(nextFreshName(), "all"));

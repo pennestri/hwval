@@ -79,6 +79,8 @@ Five steps, then a "Generated YML" panel once a POST succeeds:
    common user extra with one click. Every known field name shows a
    one-line explanation under the input, and the *What do the fields
    mean?* panel documents them all (see *Field reference* below).
+   The name of a **preset field is locked** (see *Preset field names
+   are fixed* below).
 2. **Settings** — toggles for `include_passed` / `include_failed`
    and the optional `test_id_function` (`"package.module:attr"`
    form).
@@ -98,6 +100,41 @@ The download buttons become active once the form validates:
 
 Validation errors stay on the same page, attached to the top of
 the form, with a one-line description per error.
+
+## Preset field names are fixed
+
+The names offered by the *Insert preset* dropdown are **locked**: the
+name input of such a field is read-only, marked with a `preset` badge,
+and explained on hover.
+
+```
+test_id    [the observed value…      ] preset
+```
+
+Why: the value of a field is read *by name*. The built-in attributes
+come from the record itself (`CheckRecord.test_id`, `.value`,
+`.passed`, …) and the user extras come from the keyword argument you
+passed to the check (`operator="alice"`). Rename `test_id` to `tid`
+and the report column is simply empty — the value is still looked up
+under the old name.
+
+What you can still do with a preset field:
+
+* change its **report scope** (e.g. show `msg` only in `test_results`);
+* **reorder** it;
+* **delete** it.
+
+What stays editable:
+
+* the **name of a custom field** — any name that is not a preset;
+* the report scope of every field.
+
+Typing a preset name into a custom field locks it too, so the name a
+preset field is known by stays consistent everywhere.
+
+> The lock is a `readonly` attribute — the value is still submitted
+> with the form, so a preset field never silently disappears from the
+> generated YML. (A `disabled` attribute would drop it.)
 
 ## Field reference
 

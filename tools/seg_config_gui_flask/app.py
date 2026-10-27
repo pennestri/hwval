@@ -132,6 +132,15 @@ FIELD_PRESETS: dict[str, list[str]] = {
     ],
 }
 
+# The names the "Insert preset" dropdown offers. A field carrying one
+# of these names is *fixed*: the library reads the built-in attributes
+# by name and the extras by the name of the kwarg the user passes to
+# the check, so renaming one would leave the column empty. The GUI
+# therefore renders the name input read-only for these fields.
+PRESET_FIELD_NAMES: frozenset[str] = frozenset(
+    name for names in FIELD_PRESETS.values() for name in names
+)
+
 # The extra-context rows shown on the first GET. Two common keys with
 # an empty value: the user fills them in, renames them or deletes the
 # row — the point is to show the shape of a key/value pair.
@@ -366,6 +375,7 @@ def _render_index(
         presets=FIELD_PRESETS,
         field_reference=FIELD_REFERENCE,
         field_hints=FIELD_HINTS,
+        preset_fields=PRESET_FIELD_NAMES,
         default_fields={f["name"] for f in DEFAULT_FIELDS},
         result=result,
     )
