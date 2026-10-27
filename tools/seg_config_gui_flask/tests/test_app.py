@@ -7,6 +7,7 @@ client (no live server) so the whole module runs in a few ms.
 from __future__ import annotations
 
 import io
+import html
 import unittest
 from pathlib import Path
 
@@ -551,6 +552,152 @@ class FlaskGuiTests(unittest.TestCase):
             "No fields are configured",
             "\n".join(p.text for p in doc.paragraphs),
         )
+
+
+    # ---- /load ------------------------------------------------------- #
+
+    SAMPLE_YML = (
+        "fields:\n"
+        "  - test_id\n"
+        "  - name: msg_id\n"
+        "    reports: test_performed\n"
+        "  - value\n"
+        "  - name: msg\n"
+        "    reports: test_results\n"
+        "\n"
+        "include_passed: true\n"
+        "include_failed: false\n"
+        'test_id_function: "pkg.mod:fn"\n'
+    )
+
+    def _load(self, content, name="hwval.yml", **extra):
+        data = {"yml_file": (io.BytesIO(content), name)}
+        data.update(extra)
+        return self.client.post(
+            "/load", data=data, content_type="multipart/form-data"
+        )
+
+    def test_get_shows_the_load_form(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        self.assertIn('id="load-form"', body)
+        self.assertIn('name="yml_file"', body)
+        self.assertIn("multipart/form-data", body)
+
+    def test_load_populates_the_form(self):
+        r = self._load(self.SAMPLE_YML.encode())
+        self.assertEqual(r.status_code, 200)
+        body = r.get_data(as_text=True)
+        # Success notice, and no "generated YML" panel yet.
+        self.assertIn("Loaded 4 field(s) from hwval.yml", body)
+        self.assertIn("loaded", body)
+        self.assertNotIn("Generated YML", body)
+        # Every field, in file order.
+        for name in ("test_id", "msg_id", "value", "msg"):
+            self.assertIn(f'value="{name}"', body)
+        # The per-report scope survived.
+        self.assertIn(">test_performed only", body)
+        self.assertIn(">test_results only", body)
+        # The toggles and the test_id_function.
+        self.assertIn("include_passed", body)
+        self.assertIn("include_failed", body)
+        self.assertIn('value="pkg.mod:fn"', body)
+
+    def test_load_respects_the_include_toggles(self):
+        r = self._load(self.SAMPLE_YML.encode())
+        body = r.get_data(as_text=True)
+        # include_passed: true -> checked; include_failed: false -> not.
+        self.assertRegex(
+            body, r'name="include_passed"\s*\n\s+checked')
+        self.assertNotRegex(
+            body, r'name="include_failed"\s*\n\s+checked')
+
+    def test_load_preserves_extra_context(self):
+        # The extra context is not part of the YML, so the rows the
+        # user typed must survive a load.
+        r = self._load(
+            self.SAMPLE_YML.encode(),
+            ctx_key=["project"],
+            ctx_value=["Acme DUT v3"],
+        )
+        body = r.get_data(as_text=True)
+        self.assertIn('value="project"', body)
+        self.assertIn('value="Acme DUT v3"', body)
+
+    def test_load_requires_a_file(self):
+        r = self.client.post("/load", data={})
+        self.assertEqual(r.status_code, 200)
+        body = r.get_data(as_text=True)
+        self.assertIn("Choose a .yml file to load", body)
+
+    def test_load_rejects_unknown_key(self):
+        r = self._load(b"fields:\n  - test_id\nbogus_key: 1\n")
+        body = r.get_data(as_text=True)
+        self.assertIn("unknown SegDocument config key", body)
+        self.assertIn("bogus_key", body)
+
+    def test_load_rejects_invalid_yaml(self):
+        r = self._load(b"fields: [unclosed\n")
+        body = r.get_data(as_text=True)
+        self.assertIn("Could not load the config", body)
+        self.assertIn("hwval.yml", body)
+
+    def test_load_error_names_the_file_not_the_temp_path(self):
+        # The loader quotes the path it choked on — the temp path must
+        # not leak into the page.
+        r = self._load(b"fields:\n  - test_id\nbogus_key: 1\n")
+        body = r.get_data(as_text=True)
+        self.assertIn("hwval.yml", body)
+        self.assertNotIn("/tmp", body)
+
+    def test_load_rejects_file_without_fields(self):
+        r = self._load(b"include_passed: true\n")
+        body = r.get_data(as_text=True)
+        self.assertIn("no &#39;fields&#39; entry", body)
+
+    def test_load_rejects_empty_file(self):
+        r = self._load(b"")
+        body = r.get_data(as_text=True)
+        self.assertIn("no &#39;fields&#39; entry", body)
+
+    def test_load_rejects_non_utf8(self):
+        r = self._load(b"\xff\xfe\x00binary", name="blob.bin")
+        body = r.get_data(as_text=True)
+        self.assertIn("not a UTF-8 text file", body)
+
+    def test_load_rejects_duplicate_fields(self):
+        r = self._load(b"fields:\n  - msg\n  - msg\n")
+        body = r.get_data(as_text=True)
+        self.assertIn("duplicate name", body)
+
+    def test_loaded_config_round_trips(self):
+        # Load a file, regenerate the YML from the loaded state and
+        # load that again: the result must be the same.
+        r = self._load(self.SAMPLE_YML.encode())
+        self.assertEqual(r.status_code, 200)
+
+        r2 = self.client.post("/", data={
+            "field_name": ["test_id", "msg_id", "value", "msg"],
+            "field_reports": ["all", "test_performed", "all", "test_results"],
+            "include_passed": "on",
+            "include_failed": "",
+            "test_id_function": "pkg.mod:fn",
+        })
+        yml = html.unescape(
+            r2.get_data(as_text=True)
+            .split('<pre class="code">')[1]
+            .split("</pre>")[0]
+        )
+
+        r3 = self._load(yml.encode(), name="regenerated.yml")
+        body = r3.get_data(as_text=True)
+        self.assertIn("Loaded 4 field(s) from regenerated.yml", body)
+        self.assertIn('value="msg_id"', body)
+        self.assertIn('value="pkg.mod:fn"', body)
+
+    def test_load_is_get_safe(self):
+        # The route is POST-only.
+        self.assertEqual(self.client.get("/load").status_code, 405)
 
 
 if __name__ == "__main__":

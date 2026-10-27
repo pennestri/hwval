@@ -12,10 +12,16 @@
 {% if result %}
   {% if result.errors %}
     <div class="card errors">
-      <strong>Could not generate YML:</strong>
+      <strong>{{ result.heading or "Could not generate YML:" }}</strong>
       <ul>
         {% for err in result.errors %}<li>{{ err }}</li>{% endfor %}
       </ul>
+    </div>
+  {% elif result.notice %}
+    <div class="card">
+      <h2><span class="step">✓</span>{{ result.notice }}
+        <span class="status">loaded</span>
+      </h2>
     </div>
   {% else %}
     <div class="card">
@@ -25,6 +31,27 @@
     </div>
   {% endif %}
 {% endif %}
+
+{# Load an existing config. Its own form (multipart) so the file
+   upload never touches the main form's POST. #}
+<div class="card">
+  <h2>Load an existing config</h2>
+  <p class="hint" style="margin-bottom: 8px;">
+    Already have a <code>hwval.yml</code>? Upload it and the form
+    below is filled in with its fields, toggles and
+    <code>test_id_function</code>. The file goes through the real
+    <code>hwval.docs.load_seg_config</code> loader, so a file that
+    loads here is a file that works at runtime.
+  </p>
+  <form method="post" action="{{ url_for('load_config') }}"
+        enctype="multipart/form-data" id="load-form">
+    <div class="add-row">
+      <input type="file" name="yml_file" class="file-input"
+             accept=".yml,.yaml,text/yaml">
+      <button type="submit" class="primary">Load .yml</button>
+    </div>
+  </form>
+</div>
 
 <form method="post" action="{{ url_for('index') }}" id="main-form">
   <div class="card">
@@ -211,7 +238,7 @@
       action="{{ url_for('download_template', report='test_results') }}"
       id="download-tpl-results-form" style="display: none;"></form>
 
-{% if result and not result.errors %}
+{% if result and not result.errors and result.yaml %}
   <div class="card">
     <h2><span class="step">5.</span>Generated YML</h2>
     <pre class="code">{{ result.yaml }}</pre>
@@ -392,6 +419,29 @@ function wireDownload(buttonId, formId) {
 wireDownload("download-btn", "download-form");
 wireDownload("download-tpl-performed", "download-tpl-performed-form");
 wireDownload("download-tpl-results", "download-tpl-results-form");
+
+// --- Load form: carry the extra context over --------------------------
+// The extra context is not part of the YML, so loading a file must
+// not wipe the rows the user already typed. Copy them into the load
+// form as hidden inputs right before it submits.
+const loadForm = document.getElementById("load-form");
+if (loadForm) {
+  loadForm.addEventListener("submit", () => {
+    const main = document.getElementById("main-form");
+    loadForm.querySelectorAll("input[data-ctx-copy]")
+      .forEach(i => i.remove());
+    Array.from(
+      main.querySelectorAll('input[name="ctx_key"], input[name="ctx_value"]')
+    ).forEach(el => {
+      const i = document.createElement("input");
+      i.type = "hidden";
+      i.name = el.name;
+      i.value = el.value;
+      i.dataset.ctxCopy = "1";
+      loadForm.appendChild(i);
+    });
+  });
+}
 </script>
 
 {% endblock %}

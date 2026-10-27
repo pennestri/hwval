@@ -10,6 +10,9 @@ The app also generates the two starter `.docx` templates that
 `test_results.docx`), pre-filled with the fields you declared and
 a placeholder for every extra-context key.
 
+An existing `hwval.yml` can be uploaded to fill the form in again,
+so an existing config never has to be retyped by hand.
+
 The validation logic uses the same `hwval.docs.FieldSpec` and
 `hwval.docs.load_seg_config` code the real `SegDocument`
 constructor uses, so a green "ready to download" badge means the
@@ -36,10 +39,35 @@ binds to localhost only; edit `app.run(host=...)` in
 | `POST /`          | POST    | Validate the form and re-render with the generated YML, Python-kwargs preview, and the download buttons. |
 | `POST /download`  | POST    | Same validation, but the response is `Content-Disposition: attachment; filename=hwval.yml` so the browser saves the file directly. |
 | `POST /download-template/<report>` | POST | Same validation, but the response is the starter `.docx` template for `<report>` (`test_performed` or `test_results`). |
+| `POST /load`      | POST    | Upload an existing `hwval.yml` (multipart) and re-render the form filled in with it. |
 | `GET /healthz`    | GET     | Cheap `{"status": "ok"}` liveness probe.               |
 
 `<report>` must be `test_performed` or `test_results`; anything
 else is a 404.
+
+## Load an existing config
+
+The *Load an existing config* card at the top of the page takes a
+`.yml` file upload. The file is validated with the real
+`hwval.docs.load_seg_config` loader — the same code the generated
+YML is checked against — and the form is then filled in with:
+
+* the `fields` list, in file order, with the per-report scope
+  preserved (a field scoped to `test_performed` stays scoped to
+  `test_performed`);
+* the `include_passed` / `include_failed` toggles;
+* the `test_id_function` dotted path.
+
+A file the loader rejects is reported with the loader's own message
+(plus the file name instead of the temp path the loader read):
+
+```
+Could not load the config:
+  - unknown SegDocument config key(s) in hwval.yml: ['bogus_key']; …
+```
+
+The extra context is not part of the YML, so the rows you already
+typed are carried over the load untouched.
 
 ## UI
 
@@ -218,6 +246,10 @@ curl -s -X POST http://127.0.0.1:5000/download-template/test_results \
   --data-urlencode "field_name=msg" --data-urlencode "field_reports=test_results" \
   --data-urlencode "ctx_key=project" --data-urlencode "ctx_value=Acme DUT v3" \
   -o test_results.docx
+
+# Load an existing .yml back into the form
+curl -s -X POST http://127.0.0.1:5000/load -F "yml_file=@hwval.yml" \
+  | grep -E "Loaded|field_name"
 
 # Check what landed in the template
 uv run python - <<'PY'

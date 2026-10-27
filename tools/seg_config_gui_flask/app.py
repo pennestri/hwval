@@ -26,6 +26,11 @@ fields the user declared — scoped to that report — as table columns
 plus a ``{{ rec.<field> }}`` placeholder per field, and exposes every
 ``extra_context`` key as a ``{{ <key> }}`` placeholder.
 
+An existing ``hwval.yml`` can be uploaded (``POST /load``) to fill
+the form in again; the upload is validated with the real
+:func:`hwval.docs.load_seg_config` loader, so the form only ever
+shows a config that loads at runtime.
+
 Requires the ``flask`` dev dependency (``uv sync`` pulls it in) and
 the ``hwval`` package on the Python path. The ``.docx`` download
 additionally needs the optional ``[docs]`` extra (python-docx).
@@ -34,7 +39,9 @@ additionally needs the optional ``[docs]`` extra (python-docx).
 from __future__ import annotations
 
 import keyword
+import os
 import sys
+import tempfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -88,6 +95,7 @@ def create_app() -> Flask:
         view_func=download_template,
         methods=["POST"],
     )
+    app.add_url_rule("/load", view_func=load_config, methods=["POST"])
     app.add_url_rule("/healthz", view_func=healthz, methods=["GET"])
 
     return app
@@ -218,6 +226,50 @@ def _fmt_python_value(value: Any) -> str:
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
     return repr(value)
+
+
+def _render_index(
+    fields: list[dict[str, str]],
+    settings: dict[str, Any],
+    extra_context: list[dict[str, str]],
+    result: dict[str, Any] | None,
+) -> str:
+    """Render the form with the given state.
+
+    Every route that shows the form goes through here so the
+    template always gets the same set of variables.
+    """
+    return render_template(
+        "index.html",
+        fields=fields,
+        settings=settings,
+        extra_context=extra_context,
+        report_options=REPORT_OPTIONS,
+        presets=FIELD_PRESETS,
+        result=result,
+    )
+
+
+def _fields_from_config(cfg: dict[str, Any]) -> list[dict[str, str]]:
+    """Map a loaded config's ``FieldSpec`` list back to form rows.
+
+    :attr:`hwval.docs.FieldSpec.reports` is a tuple of report
+    names; the form only offers ``all`` / ``test_performed`` /
+    ``test_results``. The two single-report tuples map onto their
+    dropdown option and everything else (the default pair, an empty
+    tuple, …) maps onto ``all``.
+    """
+    out: list[dict[str, str]] = []
+    for spec in cfg.get("fields") or []:
+        reports = set(getattr(spec, "reports", ()) or ())
+        if reports == {"test_performed"}:
+            scope = "test_performed"
+        elif reports == {"test_results"}:
+            scope = "test_results"
+        else:
+            scope = "all"
+        out.append({"name": spec.name, "reports": scope})
+    return out
 
 
 def _validate_and_build(
@@ -415,14 +467,17 @@ def index() -> str:
         extra_context = _read_extra_context()
         cfg, errors = _validate_and_build(fields, settings, extra_context)
         if errors:
-            return render_template(
-                "index.html",
-                fields=fields,
-                settings=settings,
-                extra_context=extra_context,
-                report_options=REPORT_OPTIONS,
-                presets=FIELD_PRESETS,
-                result={"errors": errors, "yaml": "", "python": ""},
+            return _render_index(
+                fields,
+                settings,
+                extra_context,
+                {
+                    "errors": errors,
+                    "yaml": "",
+                    "python": "",
+                    "notice": "",
+                    "heading": "Could not generate YML:",
+                },
             )
         yaml_text = _build_yaml_text(cfg)
         python_text = _build_python_kwargs(cfg)
@@ -431,48 +486,138 @@ def index() -> str:
         # (defence in depth — the form-level checks above should
         # already catch the same problems, but if the loader gets
         # stricter the form will still produce a working YML).
+        tmp = None
         try:
-            import tempfile, os
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".yml", delete=False
+                mode="w", suffix=".yml", delete=False, encoding="utf-8"
             ) as f:
                 f.write(yaml_text)
                 tmp = f.name
             load_seg_config(tmp)
         except Exception as e:  # pragma: no cover - defensive
-            return render_template(
-                "index.html",
-                fields=fields,
-                settings=settings,
-                extra_context=extra_context,
-                report_options=REPORT_OPTIONS,
-                presets=FIELD_PRESETS,
-                result={
+            return _render_index(
+                fields,
+                settings,
+                extra_context,
+                {
                     "errors": [f"generated YML failed validation: {e}"],
                     "yaml": yaml_text,
                     "python": python_text,
+                    "notice": "",
+                    "heading": "Could not generate YML:",
                 },
             )
         finally:
-            try:
-                os.unlink(tmp)
-            except (UnboundLocalError, OSError):
-                pass
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
         result = {
             "errors": [],
             "yaml": yaml_text,
             "python": python_text,
+            "notice": "",
+            "heading": "",
         }
 
-    return render_template(
-        "index.html",
-        fields=fields,
-        settings=settings,
-        extra_context=extra_context,
-        report_options=REPORT_OPTIONS,
-        presets=FIELD_PRESETS,
-        result=result,
+    return _render_index(fields, settings, extra_context, result)
+
+
+def load_config() -> str:
+    """Fill the form from an existing ``hwval.yml`` file.
+
+    The upload is validated with the real
+    :func:`hwval.docs.load_seg_config` loader — the same code the
+    generated YML is checked against — so a file that loads here is a
+    file that works at runtime. A file the loader rejects is reported
+    with the loader's own message.
+
+    The extra context is *not* part of the YML, so the rows the user
+    already typed are carried over unchanged.
+    """
+    fields = list(DEFAULT_FIELDS)
+    settings = {"include_passed": True, "include_failed": True,
+                "test_id_function": ""}
+    extra_context = _read_extra_context() or [
+        dict(c) for c in DEFAULT_EXTRA_CONTEXT
+    ]
+
+    def fail(message: str) -> str:
+        return _render_index(
+            fields,
+            settings,
+            extra_context,
+            {
+                "errors": [message],
+                "yaml": "",
+                "python": "",
+                "notice": "",
+                "heading": "Could not load the config:",
+            },
+        )
+
+    upload = request.files.get("yml_file")
+    filename = (upload.filename if upload else "") or ""
+    if upload is None or not filename:
+        return fail("Choose a .yml file to load.")
+
+    raw = upload.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return fail(f"{filename}: not a UTF-8 text file.")
+
+    # The loader insists on a real path, so park the upload in a
+    # temp file for the duration of the call.
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yml", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(text)
+            tmp = f.name
+        cfg = load_seg_config(tmp)
+    except Exception as e:
+        message = str(e)
+        if tmp:
+            # The loader quotes the path it choked on — show the
+            # uploaded file name instead of the temp path.
+            message = message.replace(tmp, filename)
+        if filename not in message:
+            message = f"{filename}: {message}"
+        return fail(message)
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    loaded = _fields_from_config(cfg)
+    if not loaded:
+        return fail(
+            f"{filename}: no 'fields' entry — there is nothing to load."
+        )
+
+    fields = loaded
+    settings = {
+        "include_passed": bool(cfg.get("include_passed", True)),
+        "include_failed": bool(cfg.get("include_failed", True)),
+        "test_id_function": cfg.get("test_id_function") or "",
+    }
+    return _render_index(
+        fields,
+        settings,
+        extra_context,
+        {
+            "errors": [],
+            "yaml": "",
+            "python": "",
+            "notice": f"Loaded {len(fields)} field(s) from {filename}.",
+            "heading": "",
+        },
     )
 
 

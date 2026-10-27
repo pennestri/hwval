@@ -630,6 +630,10 @@ The Flask GUI additionally
   preview rather than in the YML, because `load_seg_config` only
   accepts `fields`, `include_passed`, `include_failed` and
   `test_id_function`;
+* loads an existing `hwval.yml` back into the form (upload the file
+  at the top of the page). The upload is validated with the real
+  `load_seg_config`, so a file that loads in the GUI is a file that
+  works at runtime;
 * generates the two starter `.docx` templates
   (`test_performed.docx` + `test_results.docx`) that
   `SegDocument` consumes, pre-filled with the fields you declared
