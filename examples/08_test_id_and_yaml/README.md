@@ -7,9 +7,11 @@ Four things, all working together in this example:
    and a 1-indexed sequence counter. The default emits a sequential
    `TID_<seq:04d>`; install your own with `set_test_id_function(...)`.
 2. **A YAML config file for `SegDocument`.** The fields the report
-   exposes, the include toggles, and the test-id update function can
-   all live in a `hwval.yml` next to the test code. Edit the YAML,
-   re-run, the report layout updates — no Python change required.
+   exposes and the include toggles can live in a `hwval.yml` next to
+   the test code. Edit the YAML, re-run, the report layout updates
+   — no Python change required. The test-id update function can live
+   there too, but this example specifies it in Python instead (see
+   *Specifying the test_id function* below).
 3. **Per-report field scoping.** Each field in the YML can be
    tagged with which report it appears in: `test_performed`,
    `test_results`, or both. The same `SegDocument` then drives two
@@ -69,9 +71,10 @@ re-run `example.py` to see the change in the rendered output.
 | 2    | Per-field `reports` in `hwval.yml` (test_performed / test_results)    |
 | 3    | `**extras` on `check_value` → land in `CheckRecord.extras`            |
 | 4    | Loading the YAML via `SegDocument(..., config="hwval.yml")`           |
-| 5    | Loading the two `.docx` templates from `templates/` by path          |
-| 6    | Missing field in `extras` → renders as `""` in the report             |
-| 7    | Both `check_value` *and* `check_value_in_range` in the same run       |
+| 5    | Passing the `test_id` function as a callable (`test_id_function=`)   |
+| 6    | Loading the two `.docx` templates from `templates/` by path          |
+| 7    | Missing field in `extras` → renders as `""` in the report             |
+| 8    | Both `check_value` *and* `check_value_in_range` in the same run       |
 
 ## YAML format
 
@@ -90,7 +93,7 @@ fields:
 include_passed: true
 include_failed: true
 
-test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
+# test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
 ```
 
 - Each field is either a plain string (the field name; appears in
@@ -104,6 +107,54 @@ test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
   immediately.
 - Field names must be valid Python identifiers (they become Jinja
   attribute names inside the templates).
+
+## Specifying the test_id function
+
+There are two ways to tell `SegDocument` which function derives the
+`test_id`, and this example uses the first one.
+
+**1. In Python — a plain callable (used here).**
+
+```python
+from test_id_helpers import make_test_id          # next to example.py
+
+doc = SegDocument(
+    test_template=TEST_TEMPLATE,
+    results_template=RESULTS_TEMPLATE,
+    config=CONFIG,                                 # fields + toggles
+    extra_context={"project": "Acme DUT v3", "operator": "alice"},
+    test_id_function=make_test_id,                  # <- the callable
+)
+```
+
+No dotted path, no import gymnastics — just import the function and
+hand it over.
+
+**2. In the YML — a `"package.module:attr"` string.**
+
+```yaml
+test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
+```
+
+Same convention as `logging.config.dictConfig` and `pickle`. The
+string is resolved on `SegDocument` construction, so the module has
+to be importable at that point.
+
+**The kwarg wins.** The YML only fills in the keys the kwargs left
+at their default, and `test_id_function` defaults to `None`
+(= "not set"). So with both present, the callable passed in Python
+is the one that gets installed — `hwval.yml` keeps its line
+commented out so there is no ambiguity about which one is active.
+
+A YML `test_id_function` must be a *string*: `load_seg_config`
+rejects anything else with a `TypeError`. A callable is only
+possible through the Python kwarg.
+
+Either way the function is installed globally via
+`set_test_id_function`, so the same id ends up in the report *and*
+in the log lines emitted by `check_value`. Records that were already
+in the accumulator are re-stamped, so it does not matter whether
+the `SegDocument` is built before or after the checks run.
 
 ## test_id function shape
 

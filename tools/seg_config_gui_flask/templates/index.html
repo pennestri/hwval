@@ -81,6 +81,7 @@
             <td>
               <input type="text" name="field_name"
                      value="{{ f.name }}" placeholder="field_name">
+              <span class="field-hint">{{ field_hints.get(f.name, "") }}</span>
             </td>
             <td>
               <select name="field_reports">
@@ -118,6 +119,53 @@
       </select>
       <button type="button" class="small" id="insert-preset">Insert</button>
     </div>
+
+    {# Field reference — what each field holds and where its value
+       comes from. #}
+    <details class="field-reference">
+      <summary>What do the fields mean?</summary>
+      <table class="ref">
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>What it holds</th>
+            <th>Where the value comes from</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set ns = namespace(prev_group=None) %}
+          {% for entry in field_reference %}
+            {% if entry.group != ns.prev_group %}
+              {% set ns.prev_group = entry.group %}
+              <tr class="ref-group">
+                <td colspan="3">{{ entry.group }}</td>
+              </tr>
+            {% endif %}
+            <tr>
+              <td>
+                <code>{{ entry.name }}</code>
+                {% if entry.name in default_fields %}
+                  <span class="badge">pre-filled</span>
+                {% endif %}
+              </td>
+              <td>{{ entry.what }}</td>
+              <td>{{ entry.source }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="hint" style="margin: 10px 0 0;">
+        For every field the template looks, in order:
+        (1) your <strong>extras</strong> — any keyword argument you
+        passed to <code>check_value</code> /
+        <code>check_value_in_range</code>;
+        (2) the built-in attribute of the same name;
+        (3) the empty string.
+        So a field you declare but never pass renders as an empty
+        cell, and a field named after a built-in is filled from the
+        built-in unless you also pass it as an extra.
+      </p>
+    </details>
   </div>
 
   <div class="card">
@@ -260,6 +308,17 @@
 
 const tbody = document.getElementById("fields-tbody");
 
+// Short explanation per known field, injected by the server.
+const FIELD_HINTS = {{ field_hints | tojson }};
+
+// Show the one-liner under a field name while the user types.
+function updateFieldHint(tr) {
+  const input = tr.querySelector('input[name="field_name"]');
+  const hint = tr.querySelector('.field-hint');
+  if (!input || !hint) return;
+  hint.textContent = FIELD_HINTS[input.value.trim()] || "";
+}
+
 function nextFreshName() {
   const existing = new Set(
     Array.from(tbody.querySelectorAll('input[name="field_name"]'))
@@ -277,7 +336,10 @@ function makeRow(name, reports) {
   tr.draggable = true;
   tr.innerHTML = `
     <td class="handle" title="Drag to reorder">⋮⋮</td>
-    <td><input type="text" name="field_name" placeholder="field_name"></td>
+    <td>
+      <input type="text" name="field_name" placeholder="field_name">
+      <span class="field-hint"></span>
+    </td>
     <td>
       <select name="field_reports">
         <option value="all">both reports</option>
@@ -294,6 +356,7 @@ function makeRow(name, reports) {
   const opt = Array.from(sel.options).find(o => o.value === reports);
   if (opt) opt.selected = true;
   attachRowEvents(tr);
+  updateFieldHint(tr);
   return tr;
 }
 
@@ -301,6 +364,8 @@ function attachRowEvents(tr) {
   tr.querySelector('[data-action="del"]').addEventListener("click", () => {
     tr.remove();
   });
+  tr.querySelector('input[name="field_name"]')
+    .addEventListener("input", () => updateFieldHint(tr));
   tr.addEventListener("dragstart", e => {
     e.dataTransfer.setData("text/plain", "");
     tr.classList.add("dragging");
@@ -328,6 +393,7 @@ function attachRowEvents(tr) {
 }
 
 tbody.querySelectorAll("tr").forEach(attachRowEvents);
+tbody.querySelectorAll("tr").forEach(updateFieldHint);
 
 document.getElementById("add-field").addEventListener("click", () => {
   tbody.appendChild(makeRow(nextFreshName(), "all"));

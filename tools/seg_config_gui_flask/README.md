@@ -76,7 +76,9 @@ Five steps, then a "Generated YML" panel once a POST succeeds:
 1. **Fields** — one row per field. Edit the name, pick a report
    scope, drag the handle to reorder, click *Delete* to remove, or
    *Insert preset* to add a built-in `CheckRecord` field or a
-   common user extra with one click.
+   common user extra with one click. Every known field name shows a
+   one-line explanation under the input, and the *What do the fields
+   mean?* panel documents them all (see *Field reference* below).
 2. **Settings** — toggles for `include_passed` / `include_failed`
    and the optional `test_id_function` (`"package.module:attr"`
    form).
@@ -96,6 +98,46 @@ The download buttons become active once the form validates:
 
 Validation errors stay on the same page, attached to the top of
 the form, with a one-line description per error.
+
+## Field reference
+
+The Fields card documents the fields it knows about, in two places.
+
+**Under each field name** — a one-liner that appears as soon as the
+name matches a known field (and disappears when it does not):
+
+| Field | Hint shown under the input |
+| ----- | --------------------------- |
+| `test_id` | id of the test, from the test_id function |
+| `scope` | grouping tag of the check |
+| `msg_id` | id of the check |
+| `msg` | message of the check |
+| `value` | the observed value |
+| `expected` | the value it was compared against |
+| `passed` | did the check pass? |
+| `detail` | one-line detail of the comparison |
+| `operator` | user extra — set by `operator=` on the check |
+| `notes`, `address`, `retries`, `seq_id` | user extra — set by `<name>=` on the check |
+
+**In the *What do the fields mean?* panel** — the full table: what
+each field holds, where its value comes from, and a `pre-filled`
+badge on the fields the GUI starts with.
+
+The wording follows the `CheckRecord` docstring in `hwval.checks` —
+the authoritative description of what each attribute holds.
+
+### Where a field's value comes from
+
+For every field the template looks, in order:
+
+1. your **extras** — any keyword argument you passed to
+   `check_value` / `check_value_in_range`;
+2. the built-in attribute of the same name;
+3. the empty string.
+
+So a field you declare but never pass renders as an empty cell, and a
+field named after a built-in is filled from the built-in unless you
+also pass it as an extra.
 
 ## Extra context
 

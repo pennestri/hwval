@@ -21,8 +21,11 @@ This script:
      YML declares ``operator`` (both reports) but not ``seq_id``,
      so ``seq_id`` is stored but never rendered.
   4. The user-supplied ``make_test_id`` from ``test_id_helpers.py``
-     fills each ``CheckRecord.test_id`` (and the same id ends up in
-     the log lines).
+     is handed to ``SegDocument(test_id_function=...)`` as a plain
+     callable — no dotted path needed. It fills each
+     ``CheckRecord.test_id`` (and the same id ends up in the log
+     lines). The YML can point at the same function by dotted path
+     instead; see the note at the bottom of ``hwval.yml``.
   5. Renders the two .docx outputs and prints the rendered text so
      the per-report field split and the missing-field defaulting to
      ``""`` are visible end-to-end.
@@ -37,8 +40,11 @@ import shutil
 import sys
 from pathlib import Path
 
-# Make the ``examples`` package importable so the YML config can
-# resolve ``examples.08_test_id_and_yaml.test_id_helpers:make_test_id``.
+# Make ``test_id_helpers`` (next to this script) importable, and
+# the repo root importable too so the YML's dotted-path form
+# ("examples.08_test_id_and_yaml.test_id_helpers:make_test_id") can
+# still be resolved if you prefer to drive it from the YAML.
+sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 try:
@@ -59,6 +65,11 @@ from hwval import (
     check_value_in_range,
     reset_test_summary,
 )
+
+# The user-supplied test_id update function. It is handed to
+# SegDocument below as a plain callable — the SegDocument constructor
+# accepts either a callable or a "package.module:attr" string.
+from test_id_helpers import make_test_id
 
 
 HERE = Path(__file__).resolve().parent
@@ -127,11 +138,19 @@ def main() -> None:
     # Templates are loaded from the path; layout comes from the YML
     # via the ``config=`` kwarg. Both are real on-disk files a
     # test engineer could open in Word.
+    #
+    # ``test_id_function=make_test_id`` passes the callable straight
+    # in — no dotted path, no import gymnastics. An explicit kwarg
+    # wins over the YML: the YML only fills in the keys the kwargs
+    # left at their default, and ``test_id_function`` defaults to
+    # ``None`` (= "not set"). Drop this line to let the YML decide
+    # instead (see the note in ``hwval.yml``).
     doc = SegDocument(
         test_template=TEST_TEMPLATE,
         results_template=RESULTS_TEMPLATE,
         config=CONFIG,
         extra_context={"project": "Acme DUT v3", "operator": "alice"},
+        test_id_function=make_test_id,
     )
 
     # --- 3. Render the two .docx files ----------------------------

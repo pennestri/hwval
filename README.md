@@ -40,6 +40,58 @@ uv add hwval[docs]
 pip install hwval[docs]
 ```
 
+### From a checkout placed inside another project
+
+If the `hwval/` repo sits inside another uv project's `src/` folder,
+wire it up as a **path dependency** — it stays a separate
+distribution, but is imported as `hwval` and is editable:
+
+```bash
+cd myproject
+uv add --editable ./src/hwval
+# …or declaratively, in myproject/pyproject.toml:
+```
+
+```toml
+[project]
+dependencies = ["hwval[docs]"]          # the extra works over a path dep too
+
+[tool.uv.sources]
+hwval = { path = "src/hwval", editable = true }
+```
+
+Then `uv sync` and `from hwval import check_value` works — the
+importable package lives at `src/hwval/src/hwval`, so the path to
+point at is `src/hwval/src` (not `src/hwval`).
+
+`uv add --editable` also adds the checkout to
+`[tool.uv.workspace] members` automatically. To declare that
+yourself:
+
+```toml
+[tool.uv.workspace]
+members = ["src/hwval"]
+
+[tool.uv.sources]
+hwval = { workspace = true, editable = true }
+```
+
+Two other options:
+
+* **Copy just the package** — copy `hwval/src/hwval/` to
+  `myproject/src/hwval/`. A src-layout project puts `src/` on the
+  path, so `from hwval import …` works with no config at all. The
+  trade-off: `hwval` becomes part of *your* distribution (one
+  version, no separate `docs` extra).
+* **`PYTHONPATH`** — no config change at all:
+  `PYTHONPATH=src/hwval/src uv run python …`.
+
+One trap: keep the parent's
+`[tool.hatch.build.targets.wheel] packages = ["src/<yourpkg>"]`
+explicit. Without it, hatchling cannot work out what to ship when
+`src/` holds a checkout whose directory name does not match the
+project name, and the parent's wheel build fails.
+
 ---
 
 ## Quick start
@@ -546,6 +598,21 @@ convention as `logging.config.dictConfig` and `pickle`. It is
 resolved when `SegDocument` is constructed and installed globally
 via `set_test_id_function` so the same id ends up in the log lines
 emitted by `check_value` as well.
+
+The YML can only hold that *string* form. To hand over a callable
+directly, pass it as a kwarg — an explicit kwarg always wins over
+the YAML, so the file can still hold the fields and the toggles:
+
+```python
+from my_pkg.test_id_helpers import make_test_id
+
+doc = SegDocument(
+    test_template="templates/test_performed.docx",
+    results_template="templates/test_results.docx",
+    config="hwval.yml",              # fields + toggles from the file
+    test_id_function=make_test_id,   # the callable, in Python
+)
+```
 
 Working example: [examples/08_test_id_and_yaml](examples/08_test_id_and_yaml).
 

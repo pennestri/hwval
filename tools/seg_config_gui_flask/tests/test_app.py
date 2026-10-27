@@ -273,6 +273,72 @@ class FlaskGuiTests(unittest.TestCase):
         self.assertTrue(cfg["include_failed"])
         self.assertEqual(cfg["test_id_function"], "pkg.mod:fn")
 
+    # ---- field reference -------------------------------------------- #
+
+    def test_field_reference_table_is_rendered(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        self.assertIn("What do the fields mean?", body)
+        # Two groups: the built-in record fields and the user extras.
+        self.assertIn("Built-in CheckRecord fields", body)
+        self.assertIn("User extras (your own kwargs)", body)
+
+    def test_field_reference_explains_every_known_field(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        for name in ("test_id", "scope", "msg_id", "msg", "value",
+                     "expected", "passed", "detail", "operator"):
+            self.assertIn(f"<code>{name}</code>", body)
+        # …with an actual explanation next to each one.
+        self.assertIn("Derived by the test_id function", body)
+        self.assertIn("grouping tag", body.lower())
+        self.assertIn("the observed value", body)
+        self.assertIn("lands in the record", body)
+
+    def test_field_reference_documents_the_resolution_order(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        self.assertIn("extras", body)
+        self.assertIn("empty string", body)
+
+    def test_default_fields_are_badged_as_prefilled(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        # The GUI's own starting set is badged …
+        for name in ("test_id", "msg_id", "msg", "detail", "value",
+                     "expected", "passed", "operator"):
+            self.assertRegex(
+                body,
+                r"<code>" + name + r"</code>\s*"
+                r'<span class="badge">pre-filled</span>',
+            )
+        # … and a built-in that is not pre-filled is not.
+        self.assertNotRegex(
+            body,
+            r"<code>scope</code>\s*"
+            r'<span class="badge">pre-filled</span>',
+        )
+
+    def test_each_field_row_shows_its_hint(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        # The hint under a row matches the field name in that row.
+        self.assertIn(
+            '<span class="field-hint">id of the test, '
+            'from the test_id function</span>',
+            body,
+        )
+        self.assertIn(
+            '<span class="field-hint">did the check pass?</span>', body
+        )
+
+    def test_field_hints_are_exported_for_the_browser(self):
+        r = self.client.get("/")
+        body = r.get_data(as_text=True)
+        self.assertIn("const FIELD_HINTS = {", body)
+        self.assertIn('"scope":', body)
+        self.assertIn('"operator":', body)
+
     # ---- extra_context ----------------------------------------------- #
 
     def test_get_shows_extra_context_rows(self):

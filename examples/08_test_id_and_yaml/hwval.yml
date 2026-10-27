@@ -25,8 +25,15 @@ fields:
 include_passed: true
 include_failed: true
 
-# "package.module:attr" reference, same convention as
-# logging.config.dictConfig and pickle. Resolved on SegDocument
-# construction; installed globally via set_test_id_function so the
-# same id ends up in the log lines emitted by check_value as well.
-test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
+# The test_id update function is specified in Python: example.py
+# passes `test_id_function=make_test_id` (a plain callable) to
+# SegDocument, and an explicit kwarg wins over this file.
+#
+# Uncomment the line below to drive it from the YML instead. The
+# value must be a "package.module:attr" string — the same
+# convention as logging.config.dictConfig and pickle. It is
+# resolved on SegDocument construction and installed globally via
+# set_test_id_function, so the same id ends up in the log lines
+# emitted by check_value as well.
+#
+# test_id_function: "examples.08_test_id_and_yaml.test_id_helpers:make_test_id"
