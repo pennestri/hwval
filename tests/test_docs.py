@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - depends on optional extra
 from hwval import (  # noqa: E402  (after the optional guard)
     AlertLevel,
     CheckRecord,
+    Radix,
     TestSummary,
     check_value,
     current_summary,
@@ -619,6 +620,72 @@ class SegDocumentTests(unittest.TestCase):
         self.assertIn("TID_0002|2|3", text)
         self.assertIn("TID_0003|255|255", text)
         self.assertIn("TID_0004|66|67", text)
+
+    def test_report_prints_values_in_the_check_radix(self):
+        # A check made with radix=HEX must show 0x.. in the report,
+        # exactly like in the log line.
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "radix.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.value }}|{{ rec.expected }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "radix_out.docx"
+
+        reset_test_summary()
+        check_value(
+            0xDEAD, 0xDEAD, alert_level=AlertLevel.WARNING,
+            msg="hex", radix=Radix.HEX,
+        )
+        check_value(
+            42, 42, alert_level=AlertLevel.WARNING, msg="dec",
+        )
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=("value", "expected"),
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        self.assertIn("0xDEAD|0xDEAD", text)
+        self.assertIn("42|42", text)
+
+    def test_report_keeps_the_raw_value_on_the_record(self):
+        # The radix is a *display* concern: rec.value stays a number.
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "raw.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.value }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "raw_out.docx"
+        reset_test_summary()
+        check_value(
+            0xDEAD, 0xDEAD, alert_level=AlertLevel.WARNING,
+            msg="hex", radix=Radix.HEX,
+        )
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=("value",),
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        self.assertIn("0xDEAD", text)
+        # … while the record itself keeps the int.
+        self.assertEqual(current_summary().passed[0].value, 0xDEAD)
 
     # ---- error paths ----------------------------------------------------- #
 

@@ -167,6 +167,7 @@ class CheckRecord:
     extras: Mapping[str, Any] = field(default_factory=dict)
     value: Any = None              # the operand the check compared
     expected: Any = None           # the literal target / "in [min, max]"
+    radix: Radix = Radix.DEC       # the display radix of the check
 ```
 
 `test_id` is filled in by the active test_id function (see
@@ -179,6 +180,19 @@ without a value). `extras` carries any user-supplied YML-declared
 fields passed as ``**kwargs`` to :func:`hwval.check_value` /
 :func:`hwval.check_value_in_range`; the YML decides whether each
 extra is rendered (and in which report).
+
+`radix` remembers the display radix the check was made with, so the
+generated report prints the numbers the way the log line did — a check
+made with `radix=Radix.HEX` shows `0x2A` in the report, not `42`. Use
+`record.format_radix(value)` to render a value that way yourself.
+
+### `format_value(value, radix) -> str`
+
+Format a value the way a check with that radix would print it:
+integers in the requested radix (`0x2A`, `0b101010`, `0o52`),
+booleans as `1` / `0`, sequences as a MSB-first vector. This is the
+formatting used in the log lines, in `CheckRecord.detail` and — through
+`CheckRecord.format_radix` — in the generated docx report.
 
 ### `class FieldSpec`
 

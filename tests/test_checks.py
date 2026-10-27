@@ -14,6 +14,7 @@ from hwval import (
     TestSummary,
     check_value,
     check_value_in_range,
+    current_summary,
     get_test_id_function,
     report_test_summary,
     reset_test_summary,
@@ -477,6 +478,62 @@ class UvvmCheckTests(unittest.TestCase):
         )
         self.assertEqual(rec.value, 42)
         self.assertEqual(rec.expected, 43)
+
+    # ---- radix on the record -------------------------------------------- #
+
+    def test_record_remembers_the_radix(self):
+        check_value(0x2A, 0x2A, alert_level=AlertLevel.WARNING,
+                    msg="x", radix=Radix.HEX)
+        rec = current_summary().passed[0]
+        self.assertEqual(rec.radix, Radix.HEX)
+
+    def test_record_radix_defaults_to_dec(self):
+        rec = CheckRecord(scope="s", msg_id="i", msg="m")
+        self.assertEqual(rec.radix, Radix.DEC)
+
+    def test_format_radix_renders_integers_in_the_radix(self):
+        rec = CheckRecord(scope="s", msg_id="i", msg="m", radix=Radix.HEX)
+        self.assertEqual(rec.format_radix(42), "0x2A")
+        self.assertEqual(rec.format_radix(0), "0x0")
+        rec_bin = CheckRecord(scope="s", msg_id="i", msg="m", radix=Radix.BIN)
+        self.assertEqual(rec_bin.format_radix(42), "0b101010")
+        rec_oct = CheckRecord(scope="s", msg_id="i", msg="m", radix=Radix.OCT)
+        self.assertEqual(rec_oct.format_radix(42), "0o52")
+        rec_dec = CheckRecord(scope="s", msg_id="i", msg="m", radix=Radix.DEC)
+        self.assertEqual(rec_dec.format_radix(42), "42")
+
+    def test_format_radix_leaves_strings_alone(self):
+        # "in [0, 4095]" is already a display string, and a value the
+        # caller passed as text must not gain quotes.
+        rec = CheckRecord(scope="s", msg_id="i", msg="m", radix=Radix.HEX)
+        self.assertEqual(rec.format_radix("in [0, 4095]"), "in [0, 4095]")
+        self.assertEqual(rec.format_radix("hello"), "hello")
+
+    def test_format_radix_handles_sequences(self):
+        rec = CheckRecord(scope="s", msg_id="i", msg="m", radix=Radix.HEX)
+        self.assertEqual(rec.format_radix([0xDE, 0xAD]), "[0xDE0xAD]")
+
+    def test_range_expected_is_built_in_the_radix(self):
+        check_value_in_range(
+            0x1000, 0, 0xFFFF,
+            alert_level=AlertLevel.WARNING, msg="x", radix=Radix.HEX,
+        )
+        rec = current_summary().passed[0]
+        self.assertEqual(rec.expected, "in [0x0, 0xFFFF]")
+
+    def test_range_expected_unchanged_for_dec(self):
+        check_value_in_range(
+            100, 0, 200, alert_level=AlertLevel.WARNING, msg="x",
+        )
+        rec = current_summary().passed[0]
+        self.assertEqual(rec.expected, "in [0, 200]")
+
+    def test_format_value_is_public(self):
+        from hwval import format_value
+
+        self.assertEqual(format_value(42, Radix.HEX), "0x2A")
+        self.assertEqual(format_value(42, Radix.DEC), "42")
+        self.assertEqual(format_value(True, Radix.DEC), "1")
 
 
 if __name__ == "__main__":

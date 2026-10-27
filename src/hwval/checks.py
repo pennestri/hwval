@@ -131,6 +131,11 @@ class CheckRecord:
     field-name requests it for a given report. Fields declared in
     the YML but absent from a particular check default to the empty
     string in the rendered report.
+
+    `radix` remembers the display radix the check was made with, so
+    the generated report can print the numbers the way the log line
+    did: a check made with ``radix=Radix.HEX`` shows ``0x2A`` in the
+    report, not ``42``. See :meth:`format_radix`.
     """
 
     scope: str
@@ -142,6 +147,21 @@ class CheckRecord:
     extras: Mapping[str, Any] = field(default_factory=dict)
     value: Any = None
     expected: Any = None
+    radix: Radix = Radix.DEC
+
+    def format_radix(self, value: Any) -> str:
+        """Format ``value`` the way this record's radix prints it.
+
+        Integers come out in the record's radix (``0x2A``, ``0b1010``,
+        ``0o52``), exactly like the log line the check produced.
+
+        Strings are returned unchanged: they are already display
+        strings — the ``"in [0, 4095]"`` expected of a range check, or
+        a value the caller passed as text.
+        """
+        if isinstance(value, str):
+            return value
+        return format_value(value, self.radix)
 
 
 _summary_records: List[CheckRecord] = []
@@ -288,12 +308,28 @@ def _format_scalar(value: Any, radix: Radix) -> str:
     return repr(value)
 
 
-def _format_value(value: Any, radix: Radix) -> str:
-    """Format a scalar or sequence. UVVM treats arrays as MSB-first vectors."""
+def format_value(value: Any, radix: Radix) -> str:
+    """Format a value for display in ``radix``.
+
+    Integers are rendered in the requested radix (``0x2A``, ``0b1010``,
+    ``0o52``), booleans as ``1`` / ``0``, and sequences as a MSB-first
+    vector the way UVVM prints them.
+
+    This is the formatting used in the log lines, in
+    ``CheckRecord.detail`` and — through
+    :meth:`CheckRecord.format_radix` — in the generated docx report.
+    """
     if isinstance(value, (list, tuple)):
         sep = "" if radix in (Radix.HEX, Radix.BIN, Radix.OCT) else ", "
         return f"[{sep.join(_format_scalar(v, radix) for v in value)}]"
     return _format_scalar(value, radix)
+
+
+def _format_bound(value: Any, radix: Radix) -> str:
+    """Format a range bound: numbers in the radix, text as-is."""
+    if isinstance(value, str):
+        return value
+    return format_value(value, radix)
 
 
 def _emit(
@@ -310,8 +346,8 @@ def _emit(
 ) -> None:
     level = _ALERT_TO_LEVEL[alert_level]
     status = "PASS" if passed else "FAIL"
-    val_s = _format_value(value, radix)
-    exp_s = _format_value(exp, radix) if not isinstance(exp, str) or not exp.startswith("in [") else exp
+    val_s = format_value(value, radix)
+    exp_s = format_value(exp, radix) if not isinstance(exp, str) or not exp.startswith("in [") else exp
 
     head = f"[{scope}] {msg_id} {status}: {msg}".rstrip(": ")
     detail = f"  value={val_s} expected={exp_s}"
@@ -333,6 +369,7 @@ def _emit(
             extras=extras_dict,
             value=value,
             expected=exp,
+            radix=radix,
         )
         # Apply the user-supplied test_id function (or the default).
         # The function may rely on any of the record's fields plus the
@@ -539,10 +576,16 @@ def check_value_in_range(
         )
 
     passed = bool(min_value <= value <= max_value)
+    # The expected of a range check is a display string; build it with
+    # the radix already applied so the log line and the report agree.
+    exp = (
+        f"in [{_format_bound(min_value, radix)}, "
+        f"{_format_bound(max_value, radix)}]"
+    )
     _emit(
         passed=passed,
         value=value,
-        exp=f"in [{min_value}, {max_value}]",
+        exp=exp,
         alert_level=alert_level,
         msg=msg,
         scope=scope,

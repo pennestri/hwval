@@ -72,9 +72,10 @@ re-run `example.py` to see the change in the rendered output.
 | 3    | `**extras` on `check_value` → land in `CheckRecord.extras`            |
 | 4    | Loading the YAML via `SegDocument(..., config="hwval.yml")`           |
 | 5    | Passing the `test_id` function as a callable (`test_id_function=`)   |
-| 6    | Loading the two `.docx` templates from `templates/` by path          |
-| 7    | Missing field in `extras` → renders as `""` in the report             |
-| 8    | Both `check_value` *and* `check_value_in_range` in the same run       |
+| 6    | `radix=Radix.HEX` → the operands print as `0xDEAD` in the report      |
+| 7    | Loading the two `.docx` templates from `templates/` by path          |
+| 8    | Missing field in `extras` → renders as `""` in the report             |
+| 9    | Both `check_value` *and* `check_value_in_range` in the same run       |
 
 ## YAML format
 
@@ -168,6 +169,27 @@ The function sees the `CheckRecord` *before* `test_id` is filled in
 `reset_test_summary()`. It returns the new id as a string. Anything
 the function can compute — hash, counter, scope+msg combo, time
 prefix, … — is fair game.
+
+## The radix reaches the report
+
+The register reads in `example.py` use `radix=Radix.HEX`:
+
+```python
+check_value(0xDEAD, 0xDEAD, alert_level=AlertLevel.WARNING,
+            msg="REG0 OK", scope="reg_walk", msg_id="ID_REG0",
+            radix=Radix.HEX, operator="alice")
+```
+
+The radix is not only a log-formatting knob — the generated report
+prints the operands the same way, so the row reads
+`value=0xDEAD expected=0xDEAD` in the `.docx` too, and the log line
+and the report never disagree.
+
+The record keeps the raw number (`rec.value` is still the int
+`0xDEAD`); only the *rendered* value is formatted.
+
+The ADC range check uses the default `Radix.DEC`, so its expected
+stays readable: `in [0, 4095]`.
 
 ## Extras from check_value
 

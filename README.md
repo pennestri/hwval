@@ -123,7 +123,7 @@ Compare `value` to `exp`.
 | `msg`            | `str`             | `""`                          | Human-readable description              |
 | `scope`          | `str`             | `"C_TB_SCOPE_DEFAULT"`        | Origin scope (logged)                    |
 | `msg_id`         | `str`             | `"ID_POS_ACK"`                | Message identifier (logged)              |
-| `radix`          | `Radix`           | `Radix.HEX_BIN_IF_INVALID`    | Display radix in log                     |
+| `radix`          | `Radix`           | `Radix.HEX_BIN_IF_INVALID`    | Display radix in log *and* in the generated report |
 | `match_strictness` | `MatchStrictness` | `MatchStrictness.MATCH_STD`  | `MATCH_STD` (==) or `MATCH_EXACT` (==)   |
 
 ### `check_value_in_range(value, min_value, max_value, *[, alert_level, msg, scope, msg_id, radix]) -> bool`
@@ -188,6 +188,17 @@ Available placeholders:
 Note: each `dict` only has the keys listed in `fields` — anything you
 omit is invisible to the template, so this is also how you control what
 appears in the report's tables.
+
+The `value` and `expected` entries are rendered in the **radix the check
+was made with**: a check made with `radix=Radix.HEX` shows `0x2A` in the
+report, exactly like in the log line. The record itself keeps the raw
+number (`rec.value` is still an `int`).
+
+```python
+check_value(0xDEAD, 0xDEAD, alert_level=AlertLevel.WARNING, radix=Radix.HEX)
+# log line : value=0xDEAD expected=0xDEAD
+# report   : value=0xDEAD expected=0xDEAD
+```
 
 ### `report_test_summary(*, file=sys.stdout, reset=True, fail_on_failed=False) -> TestSummary`
 

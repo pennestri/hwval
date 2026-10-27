@@ -167,6 +167,12 @@ class FieldSpec:
 # --------------------------------------------------------------------------- #
 
 
+#: The record fields that hold a number and are therefore rendered in
+#: the record's own radix — a check made with ``radix=Radix.HEX``
+#: shows ``0x2A`` in the report, exactly like in the log line.
+_RADIX_FIELDS: frozenset[str] = frozenset({"value", "expected"})
+
+
 def _record_to_dict(record: CheckRecord, fields: Sequence[str]) -> dict:
     """Project a :class:`CheckRecord` onto the requested field names.
 
@@ -180,17 +186,29 @@ def _record_to_dict(record: CheckRecord, fields: Sequence[str]) -> dict:
        templates that loop over ``rec.<field>`` see a stable shape
        row-by-row.
 
+    The ``value`` and ``expected`` attributes are the exception: they
+    are numbers, and they are rendered through
+    :meth:`CheckRecord.format_radix` so the report prints them in the
+    radix the check was made with — whether the number came from the
+    record or from an extra of the same name.
+
     This is what makes a YML-declared field behave as "an empty string
     if not specified" in the rendered report.
     """
     out: dict[str, Any] = {}
     for name in fields:
         if name in record.extras:
-            out[name] = record.extras[name]
+            raw: Any = record.extras[name]
         elif hasattr(record, name):
-            out[name] = getattr(record, name)
+            raw = getattr(record, name)
         else:
             out[name] = ""
+            continue
+        out[name] = (
+            record.format_radix(raw)
+            if name in _RADIX_FIELDS
+            else raw
+        )
     return out
 
 
@@ -774,6 +792,12 @@ class SegDocument:
             ISO 8601 UTC timestamp of generation.
         Plus anything supplied via ``extra_context`` on the
         :class:`SegDocument` constructor.
+
+        The ``value`` and ``expected`` entries of each record dict are
+        rendered in the radix the check was made with: a check made
+        with ``radix=Radix.HEX`` shows ``0x2A`` in the report, exactly
+        like in the log line. The underlying
+        :attr:`hwval.checks.CheckRecord.value` stays a number.
         """
         if summary is None:
             summary = current_summary()

@@ -19,7 +19,9 @@ This script:
      must be inside a band" checks. Two of them pass
      ``operator="..."`` and ``seq_id="..."`` as ``**extras``; the
      YML declares ``operator`` (both reports) but not ``seq_id``,
-     so ``seq_id`` is stored but never rendered.
+     so ``seq_id`` is stored but never rendered. The register reads
+     use ``radix=Radix.HEX``, so their value shows as ``0xDEAD`` in
+     the log line *and* in the report.
   4. The user-supplied ``make_test_id`` from ``test_id_helpers.py``
      is handed to ``SegDocument(test_id_function=...)`` as a plain
      callable — no dotted path needed. It fills each
@@ -60,6 +62,7 @@ except ImportError:
 
 from hwval import (
     AlertLevel,
+    Radix,
     SegDocument,
     check_value,
     check_value_in_range,
@@ -103,20 +106,24 @@ def main() -> None:
     reset_test_summary()
 
     # --- 1a. check_value: register read-back style ----------------
+    # ``radix=Radix.HEX`` makes the check print its operands in hex
+    # — in the log line *and* in the generated report, so a register
+    # value shows as 0xDEAD rather than 57005.
     check_value(0xDEAD, 0xDEAD, alert_level=AlertLevel.WARNING,
                 msg="REG0 OK", scope="reg_walk", msg_id="ID_REG0",
-                operator="alice")
+                radix=Radix.HEX, operator="alice")
     check_value(0xBEEF, 0xCAFE, alert_level=AlertLevel.WARNING,
                 msg="REG1 drift", scope="reg_walk", msg_id="ID_REG1",
-                operator="alice", seq_id="A1")
+                radix=Radix.HEX, operator="alice", seq_id="A1")
     check_value(0x1234, 0x1234, alert_level=AlertLevel.WARNING,
                 msg="REG2 OK", scope="reg_walk", msg_id="ID_REG2",
-                operator="bob")
+                radix=Radix.HEX, operator="bob")
     # No `operator` here — it shows up as "" in the rendered
     # report (per the "missing field defaults to empty string"
     # contract).
     check_value(0x9999, 0x0001, alert_level=AlertLevel.WARNING,
-                msg="REG3 mismatch", scope="reg_walk", msg_id="ID_REG3")
+                msg="REG3 mismatch", scope="reg_walk", msg_id="ID_REG3",
+                radix=Radix.HEX)
 
     # --- 1b. check_value_in_range: "value must be inside a band" --
     check_value_in_range(
