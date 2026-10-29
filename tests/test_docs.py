@@ -656,6 +656,66 @@ class SegDocumentTests(unittest.TestCase):
         self.assertIn("0xDEAD|0xDEAD", text)
         self.assertIn("42|42", text)
 
+    def test_records_are_in_the_order_the_checks_ran(self):
+        # "records" must read like a chronological log: the passing
+        # checks and the failing ones interleaved as they ran, not
+        # "all the passing ones first".
+        from hwval.docs import SegDocument
+
+        tpl = self.root / "order.docx"
+        _make_template(
+            tpl,
+            [
+                "{%p for rec in records %}",
+                "{{ rec.test_id }}",
+                "{%p endfor %}",
+            ],
+        )
+        out = self.root / "order_out.docx"
+
+        reset_test_summary()
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="p1")
+        check_value(2, 3, alert_level=AlertLevel.WARNING, msg="f1")
+        check_value(4, 4, alert_level=AlertLevel.WARNING, msg="p2")
+        check_value(5, 6, alert_level=AlertLevel.WARNING, msg="f2")
+
+        d = SegDocument(
+            test_template=tpl,
+            results_template=tpl,
+            fields=("test_id",),
+        )
+        d._generate(test_output=out, results_output=out)
+        from docx import Document
+        text = " ".join(p.text for p in Document(str(out)).paragraphs)
+        # TID_0001, TID_0002, TID_0003, TID_0004 — the order they ran.
+        self.assertIn("TID_0001 TID_0002 TID_0003 TID_0004", text)
+
+    def test_passed_and_failed_stay_grouped(self):
+        # The results report is about the failures — those lists stay
+        # grouped even though "records" is chronological.
+        from hwval.docs import SegDocument
+
+        d = SegDocument(
+            test_template=self.test_template,
+            results_template=self.results_template,
+            fields=("test_id",),
+        )
+        reset_test_summary()
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="p1")
+        check_value(2, 3, alert_level=AlertLevel.WARNING, msg="f1")
+        summary = current_summary()
+        ctx = d._build_context(summary, d.fields)
+        self.assertEqual(
+            [r["test_id"] for r in ctx["passed"]], ["TID_0001"]
+        )
+        self.assertEqual(
+            [r["test_id"] for r in ctx["failed"]], ["TID_0002"]
+        )
+        self.assertEqual(
+            [r["test_id"] for r in ctx["records"]],
+            ["TID_0001", "TID_0002"],
+        )
+
     def test_report_keeps_the_raw_value_on_the_record(self):
         # The radix is a *display* concern: rec.value stays a number.
         from hwval.docs import SegDocument

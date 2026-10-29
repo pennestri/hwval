@@ -535,6 +535,36 @@ class UvvmCheckTests(unittest.TestCase):
         self.assertEqual(format_value(42, Radix.DEC), "42")
         self.assertEqual(format_value(True, Radix.DEC), "1")
 
+    # ---- sequence number ------------------------------------------------ #
+
+    def test_record_carries_the_sequence_number(self):
+        reset_test_summary()
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a")
+        check_value(2, 2, alert_level=AlertLevel.WARNING, msg="b")
+        records = current_summary().passed
+        self.assertEqual([r.seq for r in records], [1, 2])
+
+    def test_sequence_number_matches_the_default_test_id(self):
+        reset_test_summary()
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a")
+        check_value(2, 2, alert_level=AlertLevel.WARNING, msg="b")
+        for rec in current_summary().passed:
+            self.assertEqual(rec.test_id, f"TID_{rec.seq:04d}")
+
+    def test_sequence_number_skips_untracked_checks(self):
+        # An ERROR-level check is not recorded, so it must not burn a
+        # sequence number either.
+        reset_test_summary()
+        with self.assertRaises(AssertionError):
+            check_value(1, 2, alert_level=AlertLevel.ERROR, msg="boom")
+        check_value(1, 1, alert_level=AlertLevel.WARNING, msg="a")
+        rec = current_summary().passed[0]
+        self.assertEqual(rec.seq, 1)
+
+    def test_record_seq_defaults_to_zero(self):
+        rec = CheckRecord(scope="s", msg_id="i", msg="m")
+        self.assertEqual(rec.seq, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

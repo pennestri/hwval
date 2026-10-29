@@ -136,6 +136,11 @@ class CheckRecord:
     the generated report can print the numbers the way the log line
     did: a check made with ``radix=Radix.HEX`` shows ``0x2A`` in the
     report, not ``42``. See :meth:`format_radix`.
+
+    `seq` is the 1-indexed sequence number of the check — the order
+    the checks ran in. It is the counter handed to the test_id
+    function, so the default id ``TID_0001`` belongs to the first
+    check. The *test performed* report is written in this order.
     """
 
     scope: str
@@ -148,6 +153,7 @@ class CheckRecord:
     value: Any = None
     expected: Any = None
     radix: Radix = Radix.DEC
+    seq: int = 0
 
     def format_radix(self, value: Any) -> str:
         """Format ``value`` the way this record's radix prints it.
@@ -383,7 +389,9 @@ def _emit(
             # Reuse the seq we already allocated (don't burn another).
             _logger.debug("test_id_function raised %r; using default", e)
             test_id = _default_test_id(rec, seq)
-        rec = dataclasses.replace(rec, test_id=str(test_id))
+        # The sequence is stamped on the record as well: it is what
+        # orders the records in the *test performed* report.
+        rec = dataclasses.replace(rec, test_id=str(test_id), seq=seq)
         _summary_records.append(rec)
 
     if not passed and alert_level in _RAISING_LEVELS:

@@ -178,7 +178,7 @@ Available placeholders:
 | `summary`         | `TestSummary` (filtered)          | Counts + filtered `passed`/`failed` dicts              |
 | `passed`          | `list[dict]`                      | Filtered passing records, projected onto `fields`      |
 | `failed`          | `list[dict]`                      | Filtered failing records, projected onto `fields`      |
-| `records`         | `list[dict]`                      | `passed + failed`                                      |
+| `records`         | `list[dict]`                      | Every record, in the order the checks ran in            |
 | `fields`          | `list[str]`                       | Echo of the field names (handy for header rows)        |
 | `include_passed`  | `bool`                            | Echo of the toggle                                      |
 | `include_failed`  | `bool`                            | Echo of the toggle                                      |
@@ -188,6 +188,11 @@ Available placeholders:
 Note: each `dict` only has the keys listed in `fields` — anything you
 omit is invisible to the template, so this is also how you control what
 appears in the report's tables.
+
+`records` is ordered by the check sequence (`CheckRecord.seq`), so the
+*test performed* report reads like a chronological log — the passing and
+the failing checks interleaved as they ran. `passed` and `failed` stay
+grouped, which is what the *test results* report is about.
 
 The `value` and `expected` entries are rendered in the **radix the check
 was made with**: a check made with `radix=Radix.HEX` shows `0x2A` in the

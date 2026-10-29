@@ -677,6 +677,11 @@ class SegDocument:
         Fields not present on a record (no built-in attribute, no
         ``extras`` entry) default to the empty string so templates can
         loop over the keys without a special case.
+
+        ``records`` is ordered by :attr:`CheckRecord.seq` — the order
+        the checks ran in — so the *test performed* report reads like a
+        chronological log. ``passed`` and ``failed`` stay grouped, which
+        is what the *test results* report is about.
         """
         field_names = [f.name for f in field_specs]
         passed_records = _select(
@@ -692,13 +697,21 @@ class SegDocument:
         passed_dicts = [_record_to_dict(r, field_names) for r in passed_records]
         failed_dicts = [_record_to_dict(r, field_names) for r in failed_records]
 
+        # The chronological order: the sequence the checks ran in, not
+        # "all the passing ones, then all the failing ones".
+        ordered_records = sorted(
+            passed_records + failed_records,
+            key=lambda r: getattr(r, "seq", 0),
+        )
+        ordered_dicts = [_record_to_dict(r, field_names) for r in ordered_records]
+
         filtered_summary = TestSummary(passed=passed_dicts, failed=failed_dicts)
 
         ctx: dict[str, Any] = {
             "summary": filtered_summary,
             "passed": passed_dicts,
             "failed": failed_dicts,
-            "records": passed_dicts + failed_dicts,
+            "records": ordered_dicts,
             "fields": field_names,
             "include_passed": self.include_passed,
             "include_failed": self.include_failed,
@@ -775,14 +788,15 @@ class SegDocument:
             onto the field names declared for *this* report. Counts
             (``total``, ``passed_count``, ``failed_count``, ``ok``)
             therefore match the rendered document.
+        ``records`` : list of dict
+            Every record, in the order the checks ran in (see
+            :attr:`hwval.checks.CheckRecord.seq`).
         ``passed``  : list of dict
             Passing records projected onto the field names declared
             for this report.
         ``failed``  : list of dict
             Failing records projected onto the field names declared
             for this report.
-        ``records`` : list of dict
-            ``passed + failed``.
         ``fields``  : list of str
             The field names for this report (echo for templates that
             want to render the column header row).

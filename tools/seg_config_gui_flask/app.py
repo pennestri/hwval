@@ -124,7 +124,7 @@ REPORT_OPTIONS: list[tuple[str, str]] = [
 # preset" dropdown. Mirrors the static HTML GUI.
 FIELD_PRESETS: dict[str, list[str]] = {
     "Built-in CheckRecord fields": [
-        "test_id", "value", "expected", "passed",
+        "test_id", "seq", "value", "expected", "passed",
         "msg", "scope", "msg_id", "detail",
     ],
     "Common user extras": [
@@ -166,6 +166,14 @@ FIELD_REFERENCE: list[dict[str, str]] = [
                   "TID_0001, TID_0002, … The same id lands in the log "
                   "lines.",
         "hint": "id of the test, from the test_id function",
+    },
+    {
+        "group": "Built-in CheckRecord fields",
+        "name": "seq",
+        "what": "Sequence number of the check — the order it ran in.",
+        "source": "The 1-indexed counter handed to the test_id function; "
+                  "the default id TID_0001 belongs to the first check.",
+        "hint": "sequence number of the check (the order it ran in)",
     },
     {
         "group": "Built-in CheckRecord fields",

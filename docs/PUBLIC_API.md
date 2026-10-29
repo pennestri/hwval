@@ -168,6 +168,7 @@ class CheckRecord:
     value: Any = None              # the operand the check compared
     expected: Any = None           # the literal target / "in [min, max]"
     radix: Radix = Radix.DEC       # the display radix of the check
+    seq: int = 0                   # 1-indexed order the checks ran in
 ```
 
 `test_id` is filled in by the active test_id function (see
@@ -185,6 +186,12 @@ extra is rendered (and in which report).
 generated report prints the numbers the way the log line did — a check
 made with `radix=Radix.HEX` shows `0x2A` in the report, not `42`. Use
 `record.format_radix(value)` to render a value that way yourself.
+
+`seq` is the 1-indexed sequence number of the check — the order the
+checks ran in. It is the counter handed to the test_id function, so the
+default id `TID_0001` belongs to the first check. The *test performed*
+report is written in this order, and `seq` is available as a field name
+if you want to number the rows yourself.
 
 ### `format_value(value, radix) -> str`
 
@@ -291,7 +298,7 @@ Jinja context available to both templates:
 | `summary`         | `TestSummary` (filtered, projected to dicts) |
 | `passed`          | `list[dict]`                      |
 | `failed`          | `list[dict]`                      |
-| `records`         | `list[dict]` (`passed + failed`)  |
+| `records`         | `list[dict]` (in the order the checks ran in) |
 | `fields`          | `list[str]`                       |
 | `include_passed`  | `bool`                            |
 | `include_failed`  | `bool`                            |

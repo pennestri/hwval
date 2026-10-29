@@ -170,6 +170,32 @@ The function sees the `CheckRecord` *before* `test_id` is filled in
 the function can compute — hash, counter, scope+msg combo, time
 prefix, … — is fair game.
 
+## The test performed report is chronological
+
+The *test performed* document lists the checks in the order they ran,
+each with its test id:
+
+```
+[reg_walk.ID_REG0.0001] … REG0 OK
+[reg_walk.ID_REG1.0002] … REG1 drift
+[reg_walk.ID_REG2.0003] … REG2 OK
+```
+
+The `records` list in the template context is ordered by the check
+sequence (`CheckRecord.seq`) — not "all the passing ones first". The
+*test results* document is different on purpose: it groups the failures
+and the passes, because that is what a results report is about.
+
+The sequence number is also available as a field, so you can number the
+rows yourself:
+
+```yaml
+fields:
+  - seq            # 1, 2, 3, … the order the checks ran in
+  - test_id
+  - msg
+```
+
 ## The radix reaches the report
 
 The register reads in `example.py` use `radix=Radix.HEX`:
