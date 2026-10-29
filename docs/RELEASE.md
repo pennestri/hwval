@@ -18,7 +18,7 @@ version = "X.Y.Z"
 
 ## Pre-release checklist
 
-- [ ] `uv run pytest` is green (currently 42 tests, 3 subtests).
+- [ ] `uv run pytest` is green (currently 180 tests).
 - [ ] `uv run python examples/0?_*/example.py` runs cleanly.
 - [ ] `docs/generated/` regen'd if the docx generators changed:
       `uv run python docs/generated/generate.py`.
